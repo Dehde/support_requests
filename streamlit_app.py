@@ -51,20 +51,41 @@ def main():
     print("Entered function: main")
     st.title("Langfuse Trace Reviewer + Dynamic Scores")
 
+    # 1) Initialize client
     client = get_langfuse_client()
+
+    # 2) Load trace data & score configs
     df = load_data(client)
     score_configs = load_active_score_configs(client)
 
-    if df.empty:
-        st.warning("No traces found matching the filter!")
-        print("Exiting function: main (no traces found)")
+    # 3) Add a checkbox to filter unreviewed traces
+    st.sidebar.header("Filters")
+    show_only_unreviewed = st.sidebar.checkbox(
+        "Show only traces needing review",
+        value=True,
+        help="Check this to display only traces that haven't been reviewed yet."
+    )
+
+    if show_only_unreviewed:
+        # Filter traces where 'ideal_answer_given_inputs' is empty or NaN
+        filtered_df = df[df["ideal_answer_given_inputs"].isnull() | (df["ideal_answer_given_inputs"] == "")]
+        st.sidebar.write(f"**Traces needing review:** {filtered_df.shape[0]}")
+    else:
+        filtered_df = df
+        st.sidebar.write(f"**Total traces:** {filtered_df.shape[0]}")
+
+    if filtered_df.empty:
+        st.warning("No traces found matching the current filter!")
+        print("Exiting function: main (no traces found after filtering)")
         return
 
+    # 4) Select a trace from the filtered DataFrame
     st.subheader("Select a Trace")
-    trace_ids = df["ID"].tolist()
+    trace_ids = filtered_df["ID"].tolist()
     selected_trace_id = st.selectbox("Trace ID", options=trace_ids)
-    row = df[df["ID"] == selected_trace_id].iloc[0]
+    row = filtered_df[filtered_df["ID"] == selected_trace_id].iloc[0]
 
+    # 5) Display trace information
     st.write(f"**Timestamp:** {row['Timestamp']}")
     st.write(f"**Name / Tags:** {row['Name']} / {row['Tags']}")
 
@@ -75,6 +96,7 @@ def main():
         st.text_area("Model Thoughts", row["Model Thoughts"], height=150, disabled=True)
         st.text_area("Model Answer", row["Answer"], height=150, disabled=True)
 
+    # 6) Edit Ideal Answer
     st.subheader("Ideal Answer Given Inputs (Metadata)")
     edited_ideal_answer = st.text_area(
         "ideal_answer_given_inputs",
@@ -82,6 +104,7 @@ def main():
         height=150
     )
 
+    # 7) Dynamic Score Inputs
     st.subheader("Scores")
     new_score_values = {}
 
@@ -95,7 +118,10 @@ def main():
 
         if data_type == "CATEGORICAL":
             if categories:
+                # Insert "<None>" as an option at the top
                 all_labels = ["<None>"] + [cat["label"] for cat in categories]
+
+                # Find default index
                 default_index = 0
                 if old_val in all_labels:
                     default_index = all_labels.index(old_val)
@@ -105,11 +131,13 @@ def main():
                     options=all_labels,
                     index=default_index if default_index < len(all_labels) else 0
                 )
+                # If user picks "<None>", we store None -> no score update
                 if selected_label == "<None>":
                     new_score_values[score_name] = None
                 else:
                     new_score_values[score_name] = selected_label
             else:
+                # No categories defined => treat as text input
                 new_val = st.text_input(label_for_score, value=str(old_val))
                 if not new_val.strip():
                     new_score_values[score_name] = None
@@ -142,12 +170,14 @@ def main():
             new_bool = st.checkbox(label_for_score, value=old_bool)
             new_score_values[score_name] = new_bool
         else:
+            # Unknown or fallback
             new_val = st.text_input(label_for_score, value=str(old_val))
             if not new_val.strip():
                 new_score_values[score_name] = None
             else:
                 new_score_values[score_name] = new_val
 
+    # 8) Save Changes Button
     if st.button("Save Changes"):
         print("Save Changes clicked")
         # 1) Update the trace's ideal answer
@@ -198,6 +228,7 @@ def main():
                         value=None
                     )
 
+        # 3) Reload and export data
         updated_df = load_data(client)
         client.export_to_csv(updated_df, OUTPUT_FILE)
         st.success("Trace metadata & scores updated successfully!")
