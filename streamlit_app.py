@@ -1,5 +1,3 @@
-# streamlit_app.py
-
 import streamlit as st
 import pandas as pd
 
@@ -228,11 +226,14 @@ def main():
                         value=None
                     )
 
-        # 3) Reload and export data
+        # 3) Reload data & CSV, then force a rerun
         updated_df = load_data(client)
         client.export_to_csv(updated_df, OUTPUT_FILE)
-        st.success("Trace metadata & scores updated successfully!")
-        print("Save Changes completed")
+
+        # We won't even show st.success, because the rerun will clear it immediately
+        # If you *do* want to preserve a success message, you'd store it in st.session_state
+        print("Save Changes completed, forcing a rerun")
+        st.rerun()
 
     print("Exiting function: main")
 

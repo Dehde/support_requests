@@ -158,10 +158,7 @@ class LangfuseClient:
         # - If numeric or boolean => put that in value
         # - If textual => store it in comment
         # (If your doc or your method differs, adjust accordingly.)
-        score_kwargs = {
-            "trace_id": trace_id,
-            "name": name
-        }
+        score_kwargs = {"trace_id": trace_id, "name": name}
 
         if data_type in ("NUMERIC", "BOOLEAN"):
             # numeric or boolean => interpret 'value' as float/bool,
