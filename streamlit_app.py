@@ -7,7 +7,7 @@ Streamlit App that:
 - Shows them in a UI
 - Allows editing an 'Expected Answer' field
 - Offers a dropdown to pick or create a dataset
-- Sends an upsert request for the selected trace to Langfuse
+- Uses the Python SDK to create/update (upsert) a single dataset item
 """
 
 import streamlit as st
@@ -18,6 +18,7 @@ from typing import List, Dict, Any
 from langfuse import Langfuse
 from trace_model import LangfuseTrace
 from collections import defaultdict
+
 
 START_DATE = "2024-12-17"
 TARGET_TAG = "app_id=d6bfd7f4-39a0-4824-8720-a8b79d32f586"
@@ -92,8 +93,7 @@ def build_trace_scores_map(scores: List[Dict[str, Any]]) -> Dict[str, List[Dict[
     return trace_scores_map
 
 
-def create_data_rows(traces: List[LangfuseTrace], trace_scores_map: Dict[str, List[Dict[str, Any]]]) -> List[
-    Dict[str, Any]]:
+def create_data_rows(traces: List[LangfuseTrace], trace_scores_map: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
     """
     Create a list of row dicts for each trace, including conversation,
     retrieved contexts, and any relevant scores.
@@ -189,11 +189,10 @@ def load_traces_data() -> pd.DataFrame:
 def list_datasets() -> List[Dict[str, Any]]:
     """
     Return all existing datasets from Langfuse via public API.
-    (We use a direct REST call here; you could also do `client.datasets.list()` if available.)
+    (We assume the direct REST call is the simplest approach here.)
     """
-    url = f"{LANGFUSE_HOST}/api/public/datasets"
     resp = requests.get(
-        url,
+        f"{LANGFUSE_HOST}/api/public/datasets",
         auth=HTTPBasicAuth(LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY),
         headers={"Content-Type": "application/json"}
     )
@@ -203,66 +202,54 @@ def list_datasets() -> List[Dict[str, Any]]:
 
 def get_or_create_dataset(dataset_name: str) -> Dict[str, Any]:
     """
-    Look for a dataset by name, create it if not found, and return the dataset object.
+    Look for a dataset by name, create it if not found, and return a dict with at least {'id', 'name'}.
     """
-    # 1) See if dataset already exists
+    # 1) Check if dataset exists
     existing = [ds for ds in list_datasets() if ds.get("name") == dataset_name]
     if existing:
         return existing[0]
 
-    # 2) If not found, create a new dataset
+    # 2) Create a new dataset using the python client
     client = init_langfuse()
     created = client.datasets.create(name=dataset_name)
-    # The returned object from the python client might differ in shape.
-    # But let's assume it returns something with at least 'id' and 'name'.
-    return {
-        "id": created["id"],
-        "name": created["name"]
-    }
+    return {"id": created["id"], "name": created["name"]}
 
 
-def upsert_dataset_item(
-        dataset_id: str,
-        external_id: str,
-        input_data: Dict[str, Any],
-        expected_output: str
+def create_or_update_dataset_item(
+    dataset_name: str,
+    item_id: str,
+    input_data: Dict[str, Any],
+    expected_answer: str
 ) -> None:
     """
-    Create or update a single dataset item with the given externalId.
-    If it doesn't exist, it will be created; otherwise updated.
-
-    This uses a direct REST call to the upsert endpoint:
-      PUT /api/public/datasets/{datasetId}/items
+    Use the Python SDK's create_dataset_item() to create or update a dataset item.
+    By specifying the same 'id', future calls will overwrite the same dataset item.
     """
-    url = f"{LANGFUSE_HOST}/api/public/datasets/{dataset_id}/items"
-    payload = {
-        "externalId": external_id,
-        "input": input_data,
-        "expectedOutput": expected_output
-    }
-    resp = requests.put(
-        url,
-        auth=HTTPBasicAuth(LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY),
-        headers={"Content-Type": "application/json"},
-        json=payload
+    client = init_langfuse()
+    # This assumes create_dataset_item() will do an upsert if 'id' already exists.
+    client.create_dataset_item(
+        dataset_name=dataset_name,
+        id=item_id,  # item identifier
+        input=input_data,
+        expected_output={"answer": expected_answer},
+        metadata={}  # optionally add any extra metadata here
     )
-    resp.raise_for_status()
 
 
 def main():
-    st.title("Langfuse Trace Reviewer (Dataset Upsert)")
+    st.title("Langfuse Trace Reviewer (SDK Upsert)")
 
+    # Load trace data into DataFrame
     df = load_traces_data()
     if df.empty:
         st.warning("No traces found matching the filter!")
         return
 
+    # List existing datasets
     st.subheader("Pick an existing dataset or create a new one")
-
-    datasets = list_datasets()  # returns list of { 'id':..., 'name':... }
+    datasets = list_datasets()
     dataset_names = [ds["name"] for ds in datasets] if datasets else []
 
-    # Two ways: (A) pick from dropdown, (B) create new
     col_ds_left, col_ds_right = st.columns([2, 2])
     with col_ds_left:
         selected_dataset_name = st.selectbox(
@@ -275,16 +262,14 @@ def main():
         new_dataset_name = st.text_input(
             "Or create a new dataset",
             value="",
-            help="Enter a new dataset name here if you want to create it."
+            help="Enter a dataset name to create a new one."
         )
 
     # Decide which dataset name is being used
-    # Priority: if user typed a new name, use that; else use dropdown
     chosen_dataset_name = new_dataset_name.strip() if new_dataset_name.strip() else None
     if not chosen_dataset_name and selected_dataset_name != "<None>":
         chosen_dataset_name = selected_dataset_name
 
-    # 3) Let user pick a trace from a dropdown
     st.subheader("Select a Trace to Label")
     trace_ids = df["ID"].tolist()
     selected_trace_id = st.selectbox(
@@ -293,68 +278,69 @@ def main():
         format_func=lambda x: f"Trace: {x}"
     )
 
-    # 4) Display the chosen trace data
     trace_data = df[df["ID"] == selected_trace_id].iloc[0]
 
     st.header("Inputs")
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("User Question")
-        st.text_area(label="", value=trace_data["User Question"], height=200, disabled=True)
+        st.text_area("", value=trace_data["User Question"], height=200, disabled=True)
     with c2:
         st.subheader("Conversation History")
-        st.text_area(label="", value=trace_data["Conversation History"], height=200, disabled=True)
+        st.text_area("", value=trace_data["Conversation History"], height=200, disabled=True)
 
     st.header("Retrieved Context")
-    st.text_area(label="", value=trace_data["Retrieved Context"], height=200, disabled=True)
+    st.text_area("", value=trace_data["Retrieved Context"], height=200, disabled=True)
 
     st.header("Model Output")
     c3, c4 = st.columns(2)
     with c3:
         st.subheader("Model Thoughts")
-        st.text_area(label="", value=trace_data["Model Thoughts"], height=200, disabled=True)
+        st.text_area("", value=trace_data["Model Thoughts"], height=200, disabled=True)
     with c4:
         st.subheader("Answer")
-        st.text_area(label="", value=trace_data["Answer"], height=200, disabled=True)
+        st.text_area("", value=trace_data["Answer"], height=200, disabled=True)
 
     st.header("Expected Answer")
     expected_answer = st.text_area(
-        label="",
+        "",
         value=trace_data["Expected Answer"],
         height=200,
         key=f"expected_answer_{selected_trace_id}"
     )
 
-    # 5) Save button to upsert this item to the chosen dataset
     if st.button("Save Dataset Item"):
+        # Ensure a dataset name has been chosen/entered
         if not chosen_dataset_name:
             st.error("Please pick an existing dataset or enter a new dataset name.")
             return
 
-        # Update local DataFrame with new Expected Answer
+        # Update the local DataFrame
         df.loc[df["ID"] == selected_trace_id, "Expected Answer"] = expected_answer
-        # Optionally export to CSV if you want a local record
-        export_to_csv(df, OUTPUT_FILE)
+        export_to_csv(df, OUTPUT_FILE)  # optional local record
 
-        # 5a) Ensure the dataset actually exists (create if needed)
+        # Make sure the dataset exists (create if needed)
         dataset_obj = get_or_create_dataset(chosen_dataset_name)
 
-        # 5b) Upsert this single item (the selected trace) via direct REST call
+        # Prepare the input
         input_data = {
             "user_question": trace_data["User Question"],
             "conversation_history": trace_data["Conversation History"],
-            "context": trace_data["Retrieved Context"]
+            "context": trace_data["Retrieved Context"],
         }
-        upsert_dataset_item(
-            dataset_id=dataset_obj["id"],
-            external_id=selected_trace_id,  # The trace ID as externalId
+
+        # Upsert the single item to the dataset
+        create_or_update_dataset_item(
+            dataset_name=dataset_obj["name"],
+            item_id=selected_trace_id,  # Reuse trace ID as dataset item ID
             input_data=input_data,
-            expected_output=expected_answer
+            expected_answer=expected_answer
         )
 
         st.success(
-            f"Upserted trace '{selected_trace_id}' into dataset '{dataset_obj['name']}' "
-            f"with updated Expected Answer!"
+            f"Successfully upserted trace '{selected_trace_id}' "
+            f"into dataset '{dataset_obj['name']}' "
+            f"with updated Expected Answer."
         )
 
 
