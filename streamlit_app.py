@@ -25,6 +25,10 @@ def get_langfuse_client() -> LangfuseClient:
 
 @st.cache_data
 def load_data(_client: LangfuseClient) -> pd.DataFrame:
+    """
+    Fetch the DataFrame of traces from the LangfuseClient.
+    The leading underscore in _client tells Streamlit not to hash it.
+    """
     print("Entered function: load_data")
     df = _client.load_traces_as_dataframe()
     print("Exiting function: load_data")
@@ -33,6 +37,9 @@ def load_data(_client: LangfuseClient) -> pd.DataFrame:
 
 @st.cache_data
 def load_active_score_configs(_client: LangfuseClient) -> list:
+    """
+    Fetch all score configs, filter out archived ones, return them as a list.
+    """
     print("Entered function: load_active_score_configs")
     raw_configs = _client.list_score_configs()
     active = [c for c in raw_configs if not c.get("isArchived")]
@@ -42,7 +49,7 @@ def load_active_score_configs(_client: LangfuseClient) -> list:
 
 def main():
     print("Entered function: main")
-    st.title("Langfuse Trace Reviewer + Dynamic Scores (None for Categorical)")
+    st.title("Langfuse Trace Reviewer + Dynamic Scores")
 
     client = get_langfuse_client()
     df = load_data(client)
@@ -88,10 +95,7 @@ def main():
 
         if data_type == "CATEGORICAL":
             if categories:
-                # Insert "<None>" as an option at the top
                 all_labels = ["<None>"] + [cat["label"] for cat in categories]
-
-                # Find default index
                 default_index = 0
                 if old_val in all_labels:
                     default_index = all_labels.index(old_val)
@@ -101,24 +105,20 @@ def main():
                     options=all_labels,
                     index=default_index if default_index < len(all_labels) else 0
                 )
-                # If user picks "<None>", we store None -> no score update
                 if selected_label == "<None>":
                     new_score_values[score_name] = None
                 else:
                     new_score_values[score_name] = selected_label
             else:
-                # No categories defined => treat as text input
                 new_val = st.text_input(label_for_score, value=str(old_val))
                 if not new_val.strip():
-                    new_score_values[score_name] = None  # none if empty
+                    new_score_values[score_name] = None
                 else:
                     new_score_values[score_name] = new_val
 
         elif data_type == "NUMERIC":
             min_val = config.get("minValue", None)
             max_val = config.get("maxValue", None)
-
-            # Convert them to float to avoid MixedNumericTypesError
             if isinstance(min_val, int):
                 min_val = float(min_val)
             if isinstance(max_val, int):
@@ -142,7 +142,6 @@ def main():
             new_bool = st.checkbox(label_for_score, value=old_bool)
             new_score_values[score_name] = new_bool
         else:
-            # Unknown or fallback
             new_val = st.text_input(label_for_score, value=str(old_val))
             if not new_val.strip():
                 new_score_values[score_name] = None
@@ -151,17 +150,15 @@ def main():
 
     if st.button("Save Changes"):
         print("Save Changes clicked")
-
-        # A) Update trace's ideal answer
+        # 1) Update the trace's ideal answer
         client.update_trace_ideal_answer(selected_trace_id, edited_ideal_answer)
 
-        # B) For each active score config, only create/update if value is not None
+        # 2) For each active score config, only create/update if value is not None
         for config in score_configs:
             score_name = config["name"]
             data_type = config["dataType"]
             new_val = new_score_values.get(score_name, None)
 
-            # If it's None => skip creating/updating score
             if new_val is not None:
                 if data_type == "CATEGORICAL":
                     client.create_or_update_score(
@@ -193,7 +190,6 @@ def main():
                         string_value=None
                     )
                 else:
-                    # Fallback to "CATEGORICAL" if unrecognized
                     client.create_or_update_score(
                         trace_id=selected_trace_id,
                         name=score_name,

@@ -81,23 +81,34 @@ class LangfuseClient:
         preferred_cols = [
             "ID", "Timestamp", "User Question", "Conversation History",
             "Retrieved Context", "Model Thoughts", "Answer", "Expected Answer",
-            "ideal_answer_given_inputs",  # We'll show or edit in UI
+            "ideal_answer_given_inputs",
             "Name", "Tags"
         ]
-        # We'll append any discovered score columns as well
         existing_cols = [c for c in preferred_cols if c in df.columns]
         df = df.reindex(columns=existing_cols + [c for c in df.columns if c not in existing_cols])
         print("Exiting function: load_traces_as_dataframe")
         return df
 
     def update_trace_ideal_answer(self, trace_id: str, ideal_answer: str) -> None:
+        """
+        Upsert the trace with updated metadata['ideal_answer_given_inputs']
+        using langfuse.trace().
+        """
         print("Entered function: update_trace_ideal_answer")
-        client = self._init_client()
-        trace = client.traces.get(trace_id)
-        updated_metadata = trace.metadata or {}
-        updated_metadata["ideal_answer_given_inputs"] = ideal_answer
+        lf_client = self._init_client()
 
-        client.traces.update(trace_id, {"metadata": updated_metadata})
+        # 1) Fetch the existing trace to avoid overwriting other metadata.
+        trace_obj = lf_client.get_trace(trace_id)
+        old_metadata = trace_obj.metadata or {}
+
+        # 2) Merge your new/edited field
+        old_metadata["ideal_answer_given_inputs"] = ideal_answer
+
+        # 3) Upsert using langfuse.trace(...)
+        lf_client.trace(
+            id=trace_obj.id,
+            metadata=old_metadata
+        )
         print("Exiting function: update_trace_ideal_answer")
 
     # -------------------------------------------------------------------------
@@ -133,15 +144,48 @@ class LangfuseClient:
         value=None,
         string_value=None
     ) -> None:
+        """
+        Replaces client.create_score(...) with the documented langfuse.score(...) approach.
+
+        We'll store numeric/boolean in 'value',
+        and textual/categorical stuff in 'comment'.
+        """
         print("Entered function: create_or_update_score")
-        client = self._init_client()
-        client.create_score(
-            trace_id=trace_id,
-            name=name,
-            data_type=data_type,
-            value=value,
-            string_value=string_value
-        )
+
+        lf_client = self._init_client()
+
+        # Decide how to pass the data:
+        # - If numeric or boolean => put that in value
+        # - If textual => store it in comment
+        # (If your doc or your method differs, adjust accordingly.)
+        score_kwargs = {
+            "trace_id": trace_id,
+            "name": name
+        }
+
+        if data_type in ("NUMERIC", "BOOLEAN"):
+            # numeric or boolean => interpret 'value' as float/bool,
+            # and ignore string_value if present
+            if value is not None:
+                score_kwargs["value"] = value
+            else:
+                # fallback if no numeric => set 0 or something
+                score_kwargs["value"] = 0
+        else:
+            # e.g. CATEGORICAL or fallback
+            # store the textual representation in 'comment'
+            # ignoring numeric 'value'
+            if string_value is not None:
+                score_kwargs["comment"] = string_value
+            else:
+                score_kwargs["comment"] = ""
+
+        # Now call `lf_client.score(...)`
+        # e.g.:
+        # lf_client.score(trace_id=..., name=..., value=..., comment=...)
+        lf_client.score(**score_kwargs)
+
+        print(f"Called lf_client.score with kwargs={score_kwargs}")
         print("Exiting function: create_or_update_score")
 
     def list_score_configs(self) -> List[Dict[str, Any]]:
@@ -200,7 +244,7 @@ class LangfuseClient:
                 "Retrieved Context": ctx_text.strip(),
                 "Model Thoughts": model_thoughts,
                 "Answer": original_answer,
-                "Expected Answer": original_answer,  # for display
+                "Expected Answer": original_answer,
                 "ideal_answer_given_inputs": ideal_answer,
                 "Name": trace.name,
                 "Tags": ", ".join(trace.tags) if trace.tags else "",
@@ -210,13 +254,15 @@ class LangfuseClient:
             scores_for_trace = trace_scores_map.get(trace.id, [])
             for sc in scores_for_trace:
                 name = sc.get("name", "")
-                dt = sc.get("dataType", "")
-                # We'll store something in row[name]
+                # sc might have "value", "comment", etc.
+                # We'll do a guess: If 'comment' is present, let's store that.
+                # Otherwise store 'value'.
                 val = sc.get("value", None)
-                sval = sc.get("stringValue", None)
+                com = sc.get("comment", None)
 
-                if sval is not None:
-                    row[name] = sval
+                # We'll decide how to display it. If there's a comment, use it, else string of val
+                if com is not None and com != "":
+                    row[name] = com
                 elif val is not None:
                     row[name] = str(val)
                 else:
