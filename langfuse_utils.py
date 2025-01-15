@@ -2,7 +2,6 @@
 
 import pandas as pd
 import requests
-import streamlit
 from requests.auth import HTTPBasicAuth
 from typing import List, Dict, Any
 from collections import defaultdict
@@ -21,7 +20,8 @@ class LangfuseClient:
       - Fetching & filtering traces
       - Managing 'ideal_answer_given_inputs' in trace.metadata
       - Listing/creating/updating scores
-      - Building a DataFrame for UI display
+      - Building a DataFrame for the UI
+      - Listing score configs
     """
 
     def __init__(self, public_key: str, secret_key: str, host: str):
@@ -41,7 +41,7 @@ class LangfuseClient:
         return self._client
 
     # -------------------------------------------------------------------------
-    # Traces / Metadata
+    # 1) TRACES & METADATA
     # -------------------------------------------------------------------------
     def fetch_filtered_traces(self) -> List[LangfuseTrace]:
         """
@@ -70,7 +70,7 @@ class LangfuseClient:
 
     def load_traces_as_dataframe(self) -> pd.DataFrame:
         """
-        Returns a DataFrame containing relevant trace info (including existing 'ideal_answer_given_inputs' if found).
+        Returns a DataFrame containing relevant trace info (including 'ideal_answer_given_inputs' if found).
         """
         traces = self.fetch_filtered_traces()
         scores = self.request_scores()
@@ -81,39 +81,31 @@ class LangfuseClient:
         preferred_cols = [
             "ID", "Timestamp", "User Question", "Conversation History",
             "Retrieved Context", "Model Thoughts", "Answer", "Expected Answer",
-            "ideal_answer_given_inputs",  # We'll stick the trace metadata here if found
-            "Name", "Tags", "user_feedback", "HumanAnswerCorrectness", "HumanActionNeeded"
+            "ideal_answer_given_inputs",  # We'll show or edit in UI
+            "Name", "Tags"
         ]
+        # We'll append any discovered score columns too
         existing_cols = [c for c in preferred_cols if c in df.columns]
         df = df.reindex(columns=existing_cols + [c for c in df.columns if c not in existing_cols])
         return df
 
     def update_trace_ideal_answer(self, trace_id: str, ideal_answer: str) -> None:
         """
-        Updates the trace with a key 'ideal_answer_given_inputs' in metadata.
-        If you want to store a different key name, rename here.
+        Updates the trace by setting trace.metadata["ideal_answer_given_inputs"] = ideal_answer.
         """
         client = self._init_client()
-
-        # 1) Fetch the existing trace data (to not overwrite other metadata)
         trace = client.traces.get(trace_id)
         updated_metadata = trace.metadata or {}
         updated_metadata["ideal_answer_given_inputs"] = ideal_answer
 
-        # 2) Update the trace. The client may have a direct method or we create an "observation".
-        #    If the client has no direct 'update_trace()' method, we might do something like:
-        trace_update_input = {
-            "metadata": updated_metadata
-        }
-        client.traces.update(trace_id, trace_update_input)
+        client.traces.update(trace_id, {"metadata": updated_metadata})
 
     # -------------------------------------------------------------------------
-    # Scores
+    # 2) SCORES & SCORE CONFIG
     # -------------------------------------------------------------------------
     def request_scores(self) -> List[Dict[str, Any]]:
         """
         Return all existing scores from the public API.
-        Each score has { "id", "traceId", "name", "dataType", "value" or "stringValue", ... }
         """
         resp = requests.get(
             f"{self.host}/api/public/scores",
@@ -151,12 +143,27 @@ class LangfuseClient:
             trace_id=trace_id,
             name=name,
             data_type=data_type,
-            value=value,           # numeric or boolean
+            value=value,
             string_value=string_value
         )
 
+    def list_score_configs(self) -> List[Dict[str, Any]]:
+        """
+        Return all score configs from the public API (paginated).
+        We'll just fetch page=1 for simplicity, or you can add more logic if needed.
+        """
+        url = f"{self.host}/api/public/score-configs"
+        resp = requests.get(
+            url,
+            auth=HTTPBasicAuth(self.public_key, self.secret_key),
+            headers={"Content-Type": "application/json"},
+            params={"page": 1, "limit": 100}  # or some suitable limit
+        )
+        resp.raise_for_status()
+        return resp.json().get("data", [])
+
     # -------------------------------------------------------------------------
-    # Utility: build DataFrame rows
+    # 3) BUILD DATAFRAME ROWS
     # -------------------------------------------------------------------------
     def create_data_rows(
         self,
@@ -165,10 +172,10 @@ class LangfuseClient:
     ) -> List[Dict[str, Any]]:
         """
         Convert the traces + scores into row dicts for a DataFrame.
-        We'll also look if there's 'ideal_answer_given_inputs' in metadata.
+        We'll also check 'ideal_answer_given_inputs' in the metadata.
         """
-        allowed_scores = {"user_feedback", "HumanAnswerCorrectness", "HumanActionNeeded"}
         rows = []
+
         for trace in traces:
             ts_str = trace.timestamp.strftime("%Y-%m-%d %H:%M")
             user_q = trace.metadata.get("user_question", "")
@@ -201,26 +208,44 @@ class LangfuseClient:
                 "Retrieved Context": ctx_text.strip(),
                 "Model Thoughts": model_thoughts,
                 "Answer": original_answer,
-                "Expected Answer": original_answer,  # for display if you want
-                "ideal_answer_given_inputs": ideal_answer,  # from metadata
+                "Expected Answer": original_answer,  # for display
+                "ideal_answer_given_inputs": ideal_answer,
                 "Name": trace.name,
                 "Tags": ", ".join(trace.tags) if trace.tags else "",
             }
 
-            # Attach relevant scores
+            # Attach any existing scores
             scores_for_trace = trace_scores_map.get(trace.id, [])
             for sc in scores_for_trace:
                 name = sc.get("name", "")
                 dt = sc.get("dataType", "")
-                if name in allowed_scores:
-                    if dt == "CATEGORICAL":
-                        row[name] = sc.get("stringValue", "")
+                # We won't filter out scores here. We'll just store them as columns.
+                if dt in ("CATEGORICAL", "BOOLEAN", "NUMERIC"):
+                    # If it's a text/categorical, they might have stringValue
+                    # If numeric or boolean, might have 'value'
+                    # We'll store both if they exist. Usually one is relevant.
+                    val = sc.get("value", None)
+                    sval = sc.get("stringValue", None)
+
+                    # Try to pick the best one. If it's categorical, stringValue is more relevant.
+                    # If it's numeric, 'value' is typically the relevant field.
+                    # But for convenience, we'll just store the stringValue if it exists, else value.
+                    # Or you can store both if you want.
+                    if sval is not None:
+                        row[name] = sval
+                    elif val is not None:
+                        row[name] = str(val)
                     else:
-                        # Could be numeric or boolean
-                        row[name] = sc.get("value", "")
+                        row[name] = ""  # empty if we can't find either
+                else:
+                    # For other data types, store it if you want
+                    row[name] = sc.get("stringValue", "") or str(sc.get("value", ""))
 
             rows.append(row)
         return rows
 
+    # -------------------------------------------------------------------------
+    # CSV Export (optional)
+    # -------------------------------------------------------------------------
     def export_to_csv(self, df: pd.DataFrame, file_name: str = OUTPUT_FILE) -> None:
         df.to_csv(file_name, index=False)
