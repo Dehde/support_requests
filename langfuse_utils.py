@@ -6,7 +6,6 @@ from requests.auth import HTTPBasicAuth
 from typing import List, Dict, Any
 from collections import defaultdict
 from langfuse import Langfuse
-from trace_model import LangfuseTrace
 from langfuse.api.resources.commons.types.trace_with_details import TraceWithDetails
 
 START_DATE = "2024-12-17"
@@ -226,7 +225,7 @@ class LangfuseClient:
     # -------------------------------------------------------------------------
     def create_data_rows(
         self,
-        traces: List[LangfuseTrace],
+        traces: List[TraceWithDetails],
         trace_scores_map: Dict[str, List[Dict[str, Any]]]
     ) -> List[Dict[str, Any]]:
         print("Entered function: create_data_rows")

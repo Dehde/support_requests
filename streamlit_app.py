@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 
 from langfuse_utils import LangfuseClient, OUTPUT_FILE
-from trace_model import LangfuseTrace
 
 LANGFUSE_PUBLIC_KEY = st.secrets["LANGFUSE_PUBLIC_KEY"]
 LANGFUSE_SECRET_KEY = st.secrets["LANGFUSE_SECRET_KEY"]
