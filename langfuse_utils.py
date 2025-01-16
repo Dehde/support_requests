@@ -137,52 +137,88 @@ class LangfuseClient:
         return trace_scores_map
 
     def create_or_update_score(
-        self,
-        trace_id: str,
-        name: str,
-        data_type: str,
-        value=None,
-        string_value=None
+            self,
+            trace_id: str,
+            name: str,
+            data_type: str,
+            value=None,
+            string_value=None,
+            score_id=None
     ) -> None:
         """
-        Replaces client.create_score(...) with the documented langfuse.score(...) approach.
+        Use the official API approach:
+          - Always pass "value".
+          - If data_type=NUMERIC or BOOLEAN, 'value' is numeric (float or int).
+          - If data_type=CATEGORICAL, 'value' is string.
+          - 'comment' is optional, if you'd like to store extra info.
+          - 'id' can be passed if you want to upsert by an idempotency key.
 
-        We'll store numeric/boolean in 'value',
-        and textual/categorical stuff in 'comment'.
+        For BOOLEANS, per the doc, value is numeric: 1 -> True, 0 -> False,
+        plus the server sets stringValue to "True"/"False".
         """
         print("Entered function: create_or_update_score")
-
         lf_client = self._init_client()
 
-        # Decide how to pass the data:
-        # - If numeric or boolean => put that in value
-        # - If textual => store it in comment
-        # (If your doc or your method differs, adjust accordingly.)
-        score_kwargs = {"trace_id": trace_id, "name": name}
+        score_kwargs = {
+            "trace_id": trace_id,
+            "name": name,
+            "dataType": data_type,
+        }
 
-        if data_type in ("NUMERIC", "BOOLEAN"):
-            # numeric or boolean => interpret 'value' as float/bool,
-            # and ignore string_value if present
-            if value is not None:
-                score_kwargs["value"] = value
+        # If you want to do upserts by ID (idempotency key):
+        if score_id:
+            score_kwargs["id"] = score_id
+
+        # Decide how to pass 'value' based on data_type
+        # We'll interpret new_val differently for numeric/boolean vs. categorical
+
+        if data_type == "NUMERIC":
+            # value must be numeric
+            if value is None:
+                # default to 0
+                score_kwargs["value"] = 0.0
             else:
-                # fallback if no numeric => set 0 or something
-                score_kwargs["value"] = 0
+                score_kwargs["value"] = float(value)
+            # optionally, you might have some 'string_value' to store as well
+            # but in the doc, 'comment' is separate from 'value'
+            if string_value:
+                score_kwargs["comment"] = str(string_value)
+
+        elif data_type == "BOOLEAN":
+            # value must be numeric: 1 => True, 0 => False
+            bool_val = bool(value) if value is not None else False
+            score_kwargs["value"] = 1 if bool_val else 0
+            # The server automatically sets stringValue to "True" or "False"
+            if string_value:
+                score_kwargs["comment"] = str(string_value)
+
+        elif data_type == "CATEGORICAL":
+            # value must be a string
+            # if you pass numeric, you'd get an error
+            # We interpret 'value' or 'string_value' as the final string
+            # For safety, let's always rely on 'string_value'
+            if string_value is None and value is not None:
+                # fallback => cast numeric to str
+                score_kwargs["value"] = str(value)
+            else:
+                # typical path
+                str_val = str(string_value) if string_value is not None else ""
+                score_kwargs["value"] = str_val
+            # 'comment' is optional but can be used for additional notes
+            # e.g. if you want to store "some extra detail"
+            # score_kwargs["comment"] = "some optional extra detail"
+
         else:
-            # e.g. CATEGORICAL or fallback
-            # store the textual representation in 'comment'
-            # ignoring numeric 'value'
-            if string_value is not None:
-                score_kwargs["comment"] = string_value
-            else:
-                score_kwargs["comment"] = ""
+            # fallback or unknown type
+            # we could default to CATEGORICAL logic, or raise an error
+            # for safety, let's treat it as text
+            print(f"Warning: unknown data_type={data_type}, defaulting to string.")
+            score_kwargs["dataType"] = "CATEGORICAL"
+            str_val = str(string_value) if string_value is not None else str(value) if value else ""
+            score_kwargs["value"] = str_val
 
-        # Now call `lf_client.score(...)`
-        # e.g.:
-        # lf_client.score(trace_id=..., name=..., value=..., comment=...)
+        print(f"Sending score with: {score_kwargs}")
         lf_client.score(**score_kwargs)
-
-        print(f"Called lf_client.score with kwargs={score_kwargs}")
         print("Exiting function: create_or_update_score")
 
     def list_score_configs(self) -> List[Dict[str, Any]]:

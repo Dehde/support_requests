@@ -111,12 +111,12 @@ def main():
         data_type = config["dataType"]
         categories = config.get("categories", [])
 
-        old_val = row.get(score_name, "")
+        old_val = row.get(score_name, "")  # existing score value from DF
         label_for_score = f"{score_name} ({data_type})"
 
         if data_type == "CATEGORICAL":
             if categories:
-                # Insert "<None>" as an option at the top
+                # Insert "<None>" as an option
                 all_labels = ["<None>"] + [cat["label"] for cat in categories]
 
                 # Find default index
@@ -129,13 +129,13 @@ def main():
                     options=all_labels,
                     index=default_index if default_index < len(all_labels) else 0
                 )
-                # If user picks "<None>", we store None -> no score update
+                # If user picks "<None>", store None -> means no score update
                 if selected_label == "<None>":
                     new_score_values[score_name] = None
                 else:
                     new_score_values[score_name] = selected_label
             else:
-                # No categories defined => treat as text input
+                # No categories => treat as text input
                 new_val = st.text_input(label_for_score, value=str(old_val))
                 if not new_val.strip():
                     new_score_values[score_name] = None
@@ -168,7 +168,7 @@ def main():
             new_bool = st.checkbox(label_for_score, value=old_bool)
             new_score_values[score_name] = new_bool
         else:
-            # Unknown or fallback
+            # Fallback / unknown data type => treat as text
             new_val = st.text_input(label_for_score, value=str(old_val))
             if not new_val.strip():
                 new_score_values[score_name] = None
@@ -192,9 +192,8 @@ def main():
                     client.create_or_update_score(
                         trace_id=selected_trace_id,
                         name=score_name,
-                        data_type=data_type,
-                        string_value=str(new_val),
-                        value=None
+                        data_type="CATEGORICAL",
+                        string_value=str(new_val)  # pass the text
                     )
                 elif data_type == "NUMERIC":
                     try:
@@ -204,35 +203,30 @@ def main():
                     client.create_or_update_score(
                         trace_id=selected_trace_id,
                         name=score_name,
-                        data_type=data_type,
-                        value=float_val,
-                        string_value=None
+                        data_type="NUMERIC",
+                        value=float_val
                     )
                 elif data_type == "BOOLEAN":
                     bool_val = bool(new_val)
                     client.create_or_update_score(
                         trace_id=selected_trace_id,
                         name=score_name,
-                        data_type=data_type,
-                        value=bool_val,
-                        string_value=None
+                        data_type="BOOLEAN",
+                        value=bool_val  # internally converted to 1.0 or 0.0
                     )
                 else:
+                    # Fallback => treat as CATEGORICAL text
                     client.create_or_update_score(
                         trace_id=selected_trace_id,
                         name=score_name,
                         data_type="CATEGORICAL",
-                        string_value=str(new_val),
-                        value=None
+                        string_value=str(new_val)
                     )
 
-        # 3) Reload data & CSV, then force a rerun
         updated_df = load_data(client)
         client.export_to_csv(updated_df, OUTPUT_FILE)
 
-        # We won't even show st.success, because the rerun will clear it immediately
-        # If you *do* want to preserve a success message, you'd store it in st.session_state
-        print("Save Changes completed, forcing a rerun")
+        print("Save Changes completed, rerunning app")
         st.rerun()
 
     print("Exiting function: main")
