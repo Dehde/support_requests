@@ -1,11 +1,13 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime
 
 from langfuse_utils import LangfuseClient, OUTPUT_FILE
 
 LANGFUSE_PUBLIC_KEY = st.secrets["LANGFUSE_PUBLIC_KEY"]
 LANGFUSE_SECRET_KEY = st.secrets["LANGFUSE_SECRET_KEY"]
 LANGFUSE_HOST = st.secrets["LANGFUSE_HOST"]
+
 
 @st.cache_resource
 def get_langfuse_client() -> LangfuseClient:
@@ -18,12 +20,19 @@ def get_langfuse_client() -> LangfuseClient:
     print("Exiting function: get_langfuse_client")
     return client
 
+
 @st.cache_data
-def load_data(_client: LangfuseClient) -> pd.DataFrame:
-    print("Entered function: load_data")
-    df = _client.load_traces_as_dataframe()
-    print("Exiting function: load_data")
-    return df
+def get_current_date_key() -> str:
+    """Returns today's date as a string - will be different each day"""
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+@st.cache_data
+def load_data_for_date(_client: LangfuseClient, date_key: str) -> pd.DataFrame:
+    """Loads data from API - cached separately for each date"""
+    print(f"Loading fresh data for date: {date_key}")
+    return _client.load_traces_as_dataframe()
+
 
 @st.cache_data
 def load_active_score_configs(_client: LangfuseClient) -> list:
@@ -33,6 +42,7 @@ def load_active_score_configs(_client: LangfuseClient) -> list:
     print("Exiting function: load_active_score_configs")
     return active
 
+
 def main():
     print("Entered function: main")
     st.title("Langfuse Trace Reviewer + Dynamic Scores")
@@ -40,8 +50,16 @@ def main():
     # 1) Initialize client
     client = get_langfuse_client()
 
-    # 2) Load trace data & score configs
-    df = load_data(client)
+    # 2) Load trace data & score configs - with date checking
+    today_key = get_current_date_key()
+    
+    # Initialize or update session state based on date
+    if "current_df" not in st.session_state or "last_load_date" not in st.session_state or st.session_state.last_load_date != today_key:
+        st.session_state.current_df = load_data_for_date(client, today_key)
+        st.session_state.last_load_date = today_key
+    
+    df = st.session_state.current_df
+    
     score_configs = load_active_score_configs(client)
 
     # 3) Add a checkbox to filter unreviewed traces
@@ -72,31 +90,36 @@ def main():
     # Use the row index in the selectbox, but show the Timestamp as the label
     selected_index = st.selectbox(
         label="Traces",
-        options=filtered_df.index,  # integer indexes
+        options=filtered_df.index,
         format_func=lambda i: filtered_df.loc[i, "Timestamp"]  # show timestamp as label
     )
 
     row = filtered_df.loc[selected_index]
-    selected_trace_id = row["ID"]  # keep track of the real ID internally
+    selected_trace_id = row["ID"]
 
-    # 5) Display trace information (no more ID shown in UI)
+    # 5) Display trace information
     st.write(f"**Timestamp:** {row['Timestamp']}")
     st.write(f"**Name / Tags:** {row['Name']} / {row['Tags']}")
 
     with st.expander("Conversation & Model Output", expanded=True):
+        # For read-only fields, we usually don't need dynamic keys (they won't preserve user edits).
+        # But it's fine either way if you want them to update reliably.
         st.text_area("User Question", row["User Question"], height=150, disabled=True)
         st.text_area("Conversation", row["Conversation History"], height=150, disabled=True)
         st.text_area("Retrieved Context", row["Retrieved Context"], height=150, disabled=True)
         st.text_area("Model Thoughts", row["Model Thoughts"], height=150, disabled=True)
         st.text_area("Model Answer", row["Answer"], height=150, disabled=True)
 
-    # 6) Edit Ideal Answer
+    # 6) Edit Ideal Answer - give it a dynamic key
     st.subheader("Ideal Answer Given Inputs (Metadata)")
     edited_ideal_answer = st.text_area(
         "ideal_answer_given_inputs",
         value=row["ideal_answer_given_inputs"],
-        height=150
+        height=150,
+        key=f"ideal_answer_{selected_trace_id}"
     )
+    print("Ideal Answer Given Inputs (Metadata)", row)
+    print("Ideal Answer Given Inputs (Metadata)", {row["ideal_answer_given_inputs"]})
 
     # 7) Dynamic Score Inputs
     st.subheader("Scores")
@@ -110,11 +133,12 @@ def main():
         old_val = row.get(score_name, "")  # existing score value from DF
         label_for_score = f"{score_name} ({data_type})"
 
+        # We'll include the trace ID in the key so each trace gets its own widget state
+        dynamic_key = f"{score_name}_{selected_trace_id}"
+
         if data_type == "CATEGORICAL":
             if categories:
-                # Insert "<None>" as an option
                 all_labels = ["<None>"] + [cat["label"] for cat in categories]
-
                 default_index = 0
                 if old_val in all_labels:
                     default_index = all_labels.index(old_val)
@@ -122,14 +146,15 @@ def main():
                 selected_label = st.selectbox(
                     label_for_score,
                     options=all_labels,
-                    index=default_index if default_index < len(all_labels) else 0
+                    index=default_index if default_index < len(all_labels) else 0,
+                    key=dynamic_key
                 )
                 if selected_label == "<None>":
                     new_score_values[score_name] = None
                 else:
                     new_score_values[score_name] = selected_label
             else:
-                new_val = st.text_input(label_for_score, value=str(old_val))
+                new_val = st.text_input(label_for_score, value=str(old_val), key=dynamic_key)
                 if not new_val.strip():
                     new_score_values[score_name] = None
                 else:
@@ -152,17 +177,18 @@ def main():
                 label_for_score,
                 min_value=min_val if min_val is not None else None,
                 max_value=max_val if max_val is not None else None,
-                value=old_float
+                value=old_float,
+                key=dynamic_key
             )
             new_score_values[score_name] = new_float
 
         elif data_type == "BOOLEAN":
             old_bool = str(old_val).lower() in ("true", "yes", "1")
-            new_bool = st.checkbox(label_for_score, value=old_bool)
+            new_bool = st.checkbox(label_for_score, value=old_bool, key=dynamic_key)
             new_score_values[score_name] = new_bool
         else:
             # Fallback / unknown data type => treat as text
-            new_val = st.text_input(label_for_score, value=str(old_val))
+            new_val = st.text_input(label_for_score, value=str(old_val), key=dynamic_key)
             if not new_val.strip():
                 new_score_values[score_name] = None
             else:
@@ -181,46 +207,38 @@ def main():
             new_val = new_score_values.get(score_name, None)
 
             if new_val is not None:
-                if data_type == "CATEGORICAL":
-                    client.create_or_update_score(
-                        trace_id=selected_trace_id,
-                        name=score_name,
-                        data_type="CATEGORICAL",
-                        string_value=str(new_val)
-                    )
-                elif data_type == "NUMERIC":
+                # Prepare the value based on data type
+                if data_type == "NUMERIC":
                     try:
-                        float_val = float(new_val)
+                        value = float(new_val)
                     except:
-                        float_val = 0.0
-                    client.create_or_update_score(
-                        trace_id=selected_trace_id,
-                        name=score_name,
-                        data_type="NUMERIC",
-                        value=float_val
-                    )
+                        value = 0.0
                 elif data_type == "BOOLEAN":
-                    bool_val = bool(new_val)
-                    client.create_or_update_score(
-                        trace_id=selected_trace_id,
-                        name=score_name,
-                        data_type="BOOLEAN",
-                        value=bool_val
-                    )
-                else:
-                    client.create_or_update_score(
-                        trace_id=selected_trace_id,
-                        name=score_name,
-                        data_type="CATEGORICAL",
-                        string_value=str(new_val)
-                    )
+                    value = bool(new_val)
+                else:  # CATEGORICAL or fallback
+                    value = str(new_val)
+                    data_type = "CATEGORICAL"  # Force unknown types to CATEGORICAL
 
-        updated_df = load_data(client)
-        client.export_to_csv(updated_df, OUTPUT_FILE)
+                kwargs = {
+                    "trace_id": selected_trace_id,
+                    "name": score_name,
+                    "data_type": data_type,
+                }
+                kwargs["string_value" if data_type == "CATEGORICAL" else "value"] = value
+                client.create_or_update_score(**kwargs)
 
-        print("Save Changes completed, rerunning app")
+        # Update session state DataFrame
+        st.session_state.current_df.loc[df["ID"] == selected_trace_id, "ideal_answer_given_inputs"] = edited_ideal_answer
+        
+        # Update scores in the session state DataFrame
+        for config in score_configs:
+            score_name = config["name"]
+            new_val = new_score_values.get(score_name, None)
+            if new_val is not None:
+                st.session_state.current_df.loc[df["ID"] == selected_trace_id, score_name] = new_val
+
+        client.export_to_csv(st.session_state.current_df, OUTPUT_FILE)
         st.success("Trace data and scores updated successfully!")
-        # st.rerun()
 
     print("Exiting function: main")
 

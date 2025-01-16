@@ -52,7 +52,7 @@ class LangfuseClient:
         # Convert your START_DATE to a UTC-aware datetime if it isn't already
         start_dt = pd.to_datetime(START_DATE, utc=True)
         all_traces = []
-        limit = 50  # The API default is typically 50, you can adjust as needed
+        limit = 100  # The API default is typically 50, you can adjust as needed
         page = 1
         # Keep fetching traces until a page returns fewer than 'limit' results
         while True:
@@ -69,6 +69,10 @@ class LangfuseClient:
                 break
             page += 1
         print(f"Exiting function: fetch_filtered_traces. Total: {len(all_traces)} trace(s).")
+        for trace in all_traces:
+            if trace.id == "55c4f7ba-684d-4703-b2fb-cf08867e027f":
+                print()
+                print()
         return all_traces
 
     def load_traces_as_dataframe(self) -> pd.DataFrame:
