@@ -70,6 +70,9 @@ class LangfuseClient:
         rows = self.create_data_rows(traces, scores_map)
         df = pd.DataFrame(rows)
 
+        # Deduplicate based on 'User Question', keeping the first occurrence
+        df = df.drop_duplicates(subset=['User Question'], keep='first')
+
         preferred_cols = [
             "ID", "Timestamp", "User Question", "Conversation History",
             "Retrieved Context", "Model Thoughts", "Answer", "Expected Answer",
