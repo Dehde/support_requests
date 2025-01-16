@@ -49,10 +49,26 @@ class LangfuseClient:
     def fetch_filtered_traces(self) -> List[TraceWithDetails]:
         print("Entered function: fetch_filtered_traces")
         client = self._init_client()
+        # Convert your START_DATE to a UTC-aware datetime if it isn't already
         start_dt = pd.to_datetime(START_DATE, utc=True)
-        response = client.fetch_traces(tags=[TARGET_TAG], from_timestamp=start_dt)
-        all_traces = response.data
-        print("Exiting function: fetch_filtered_traces")
+        all_traces = []
+        limit = 50  # The API default is typically 50, you can adjust as needed
+        page = 1
+        # Keep fetching traces until a page returns fewer than 'limit' results
+        while True:
+            response = client.fetch_traces(
+                tags=[TARGET_TAG],
+                from_timestamp=start_dt,
+                limit=limit,
+                page=page
+            )
+            all_traces.extend(response.data)
+            print(f"Fetched {len(response.data)} trace(s) for page={page}")
+            # If the response has fewer than 'limit' items, it's the last page
+            if len(response.data) < limit:
+                break
+            page += 1
+        print(f"Exiting function: fetch_filtered_traces. Total: {len(all_traces)} trace(s).")
         return all_traces
 
     def load_traces_as_dataframe(self) -> pd.DataFrame:
