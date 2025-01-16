@@ -87,17 +87,52 @@ def main():
     # 4) Sort by timestamp DESC and select by index
     filtered_df = filtered_df.sort_values(by="Timestamp", ascending=False).reset_index(drop=True)
 
-    st.subheader("Select a Trace by Timestamp")
+    st.subheader("Select a Trace")
 
-    # Use the row index in the selectbox, but show the Timestamp as the label
-    selected_index = st.selectbox(
-        label="Traces",
-        options=filtered_df.index,
-        format_func=lambda i: filtered_df.loc[i, "Timestamp"]
+    # Convert Timestamp column to datetime if it's not already
+    filtered_df['Timestamp'] = pd.to_datetime(filtered_df['Timestamp'])
+    
+    # Get unique months and format them
+    unique_months = filtered_df['Timestamp'].dt.to_period('M').unique()
+    month_options = sorted(unique_months, reverse=True)  # Most recent first
+    
+    selected_month = st.selectbox(
+        "Select Month",
+        options=month_options,
+        format_func=lambda x: x.strftime("%b '%y")  # Format like "Jan '24"
     )
 
-    selected_trace_id = filtered_df.loc[selected_index]["ID"]
+    # Filter traces for selected month
+    month_traces = filtered_df[filtered_df['Timestamp'].dt.to_period('M') == selected_month]
+    month_traces = month_traces.sort_values(by="Timestamp", ascending=False).reset_index(drop=True)
+    
+    # Add monthly statistics to sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.header("Monthly Statistics")
+    monthly_counts = filtered_df.groupby(filtered_df['Timestamp'].dt.to_period('M')).size()
+    for month in sorted(monthly_counts.index, reverse=True):
+        count = monthly_counts[month]
+        st.sidebar.write(f"**{month.strftime('%b %Y')}:** {count} traces")
+
+    # Create timestamp-question selection for the selected month
+    def format_trace_option(index):
+        row = month_traces.loc[index]
+        timestamp = row["Timestamp"].strftime("%Y-%m-%d %H:%M:%S")
+        question_preview = row["User Question"][:50] + "..." if len(row["User Question"]) > 50 else row["User Question"]
+        return f"{timestamp} - {question_preview}"
+
+    selected_index = st.selectbox(
+        "Select Trace",
+        options=month_traces.index,
+        format_func=format_trace_option
+    )
+
+    selected_trace_id = month_traces.loc[selected_index]["ID"]
     print(selected_trace_id)
+    
+    # Add trace ID display
+    st.write(f"**Trace ID:** {selected_trace_id}")
+    
     st.session_state.current_df = client.update_trace_in_df(st.session_state.current_df, selected_trace_id)
     row = st.session_state.current_df[st.session_state.current_df['ID'] == selected_trace_id].iloc[0]
 
