@@ -7,6 +7,7 @@ from typing import List, Dict, Any
 from collections import defaultdict
 from langfuse import Langfuse
 from langfuse.api.resources.commons.types.trace_with_details import TraceWithDetails
+import numpy as np
 
 START_DATE = "2024-12-17"
 TARGET_TAG = "app_id=d6bfd7f4-39a0-4824-8720-a8b79d32f586"
@@ -29,36 +30,26 @@ class LangfuseClient:
         self.public_key = public_key
         self.secret_key = secret_key
         self.host = host
-        self._client = None
-        print("Exiting function: LangfuseClient.__init__")
-
-    def _init_client(self) -> Langfuse:
-        print("Entered function: _init_client")
-        if not self._client:
-            self._client = Langfuse(
+        self._client = Langfuse(
                 public_key=self.public_key,
                 secret_key=self.secret_key,
                 host=self.host
             )
-        print("Exiting function: _init_client")
-        return self._client
 
-    # -------------------------------------------------------------------------
-    # 1) TRACES & METADATA
-    # -------------------------------------------------------------------------
     def fetch_filtered_traces(self) -> List[TraceWithDetails]:
         print("Entered function: fetch_filtered_traces")
-        client = self._init_client()
         # Convert your START_DATE to a UTC-aware datetime if it isn't already
         start_dt = pd.to_datetime(START_DATE, utc=True)
+        end_dt = pd.Timestamp.now(tz='UTC')
         all_traces = []
         limit = 100  # The API default is typically 50, you can adjust as needed
         page = 1
         # Keep fetching traces until a page returns fewer than 'limit' results
         while True:
-            response = client.fetch_traces(
+            response = self._client.fetch_traces(
                 tags=[TARGET_TAG],
                 from_timestamp=start_dt,
+                to_timestamp=end_dt,
                 limit=limit,
                 page=page
             )
@@ -69,10 +60,6 @@ class LangfuseClient:
                 break
             page += 1
         print(f"Exiting function: fetch_filtered_traces. Total: {len(all_traces)} trace(s).")
-        for trace in all_traces:
-            if trace.id == "55c4f7ba-684d-4703-b2fb-cf08867e027f":
-                print()
-                print()
         return all_traces
 
     def load_traces_as_dataframe(self) -> pd.DataFrame:
@@ -100,25 +87,12 @@ class LangfuseClient:
         using langfuse.trace().
         """
         print("Entered function: update_trace_ideal_answer")
-        lf_client = self._init_client()
-
-        # 1) Fetch the existing trace to avoid overwriting other metadata.
-        trace_obj = lf_client.get_trace(trace_id)
+        trace_obj = self._client.get_trace(trace_id)
         old_metadata = trace_obj.metadata or {}
-
-        # 2) Merge your new/edited field
         old_metadata["ideal_answer_given_inputs"] = ideal_answer
-
-        # 3) Upsert using langfuse.trace(...)
-        lf_client.trace(
-            id=trace_obj.id,
-            metadata=old_metadata
-        )
+        self._client.trace(id=trace_obj.id, metadata=old_metadata)
         print("Exiting function: update_trace_ideal_answer")
 
-    # -------------------------------------------------------------------------
-    # 2) SCORES & SCORE CONFIG
-    # -------------------------------------------------------------------------
     def request_scores(self) -> List[Dict[str, Any]]:
         print("Entered function: request_scores")
         resp = requests.get(
@@ -162,8 +136,6 @@ class LangfuseClient:
         plus the server sets stringValue to "True"/"False".
         """
         print("Entered function: create_or_update_score")
-        lf_client = self._init_client()
-
         score_kwargs = {
             "trace_id": trace_id,
             "name": name,
@@ -223,7 +195,7 @@ class LangfuseClient:
             score_kwargs["value"] = str_val
 
         print(f"Sending score with: {score_kwargs}")
-        lf_client.score(**score_kwargs)
+        self._client.score(**score_kwargs)
         print("Exiting function: create_or_update_score")
 
     def list_score_configs(self) -> List[Dict[str, Any]]:
@@ -251,18 +223,14 @@ class LangfuseClient:
         print("Entered function: create_data_rows")
         rows = []
         for trace in traces:
-            # Include seconds in your timestamp
             ts_str = trace.timestamp.strftime("%Y-%m-%d %H:%M:%S")  # Changed here
-
             user_q = trace.metadata.get("user_question", "")
             model_thoughts = trace.metadata.get("model_thoughts", "")
-
             conv_entries = trace.metadata.get("conversation_history") or []
             conversation_history = "\n".join(
                 f"{e.get('role', 'unknown')}: {e.get('content', '')}"
                 for e in conv_entries
             )
-
             retrieved_contexts = trace.metadata.get("retrieved_contexts", [])
             retrieved_contexts_sorted = sorted(
                 retrieved_contexts, key=lambda c: c.get("cosine_distance", 9999)
@@ -316,6 +284,22 @@ class LangfuseClient:
         df.to_csv(file_name, index=False)
         print("Exiting function: export_to_csv")
 
+    def update_trace_in_df(self, df: pd.DataFrame, trace_id: str) -> pd.DataFrame:
+        """
+        Updates a single trace in the DataFrame with fresh data from Langfuse.
+        Returns the updated DataFrame.
+        """
+        print(f"Entered function: update_trace_in_df for trace_id={trace_id}")
+        trace = self._client.fetch_trace(trace_id).data
+        scores = self.request_scores()
+        scores_map = self.build_trace_scores_map(scores)
+        updated_row = self.create_data_rows([trace,], scores_map)[0]
+        updated_row = pd.Series(updated_row).reindex(df.columns, fill_value=np.nan)
+        old_id = df.loc[df['ID'] == trace_id].index[0]
+        df.loc[old_id, df.columns] = pd.Series(updated_row).reindex(df.columns, fill_value=np.nan).values
+        print("Exiting function: update_trace_in_df")
+        return df
+
 
 if __name__ == "__main__":
     import sys
@@ -331,7 +315,14 @@ if __name__ == "__main__":
         df = client.load_traces_as_dataframe()
         print(f"Loaded {len(df)} traces.")
 
-        print(f"Exporting DataFrame to {OUTPUT_FILE}...")
+        # Test updating a single trace - let's use the first one
+        if not df.empty:
+            test_trace_id = df.iloc[0]['ID']
+            print(f"\nTesting single trace update for ID: {test_trace_id}")
+            updated_df = client.update_trace_in_df(df, test_trace_id)
+            print("Successfully updated trace in DataFrame")
+
+        print(f"\nExporting DataFrame to {OUTPUT_FILE}...")
         client.export_to_csv(df)
         print(f"Successfully exported traces to {OUTPUT_FILE}.")
 

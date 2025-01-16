@@ -91,11 +91,13 @@ def main():
     selected_index = st.selectbox(
         label="Traces",
         options=filtered_df.index,
-        format_func=lambda i: filtered_df.loc[i, "Timestamp"]  # show timestamp as label
+        format_func=lambda i: filtered_df.loc[i, "Timestamp"]
     )
 
-    row = filtered_df.loc[selected_index]
-    selected_trace_id = row["ID"]
+    selected_trace_id = filtered_df.loc[selected_index]["ID"]
+    print(selected_trace_id)
+    st.session_state.current_df = client.update_trace_in_df(st.session_state.current_df, selected_trace_id)
+    row = st.session_state.current_df[st.session_state.current_df['ID'] == selected_trace_id].iloc[0]
 
     # 5) Display trace information
     st.write(f"**Timestamp:** {row['Timestamp']}")
