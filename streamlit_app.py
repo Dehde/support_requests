@@ -69,13 +69,15 @@ def main():
         value=True,
         help="Check this to display only traces that haven't been reviewed yet."
     )
+    df_not_reviewed = df[df["ideal_answer"].isnull() | (df["ideal_answer"] == "")]
+    st.sidebar.write(f"**Traces needing review:** {df_not_reviewed.shape[0]}")
+    st.sidebar.write(f"**Total traces:** {df.shape[0]}")
 
     if show_only_unreviewed:
-        filtered_df = df[df["ideal_answer_given_inputs"].isnull() | (df["ideal_answer_given_inputs"] == "")]
-        st.sidebar.write(f"**Traces needing review:** {filtered_df.shape[0]}")
+        filtered_df = df_not_reviewed
+        
     else:
         filtered_df = df
-        st.sidebar.write(f"**Total traces:** {filtered_df.shape[0]}")
 
     if filtered_df.empty:
         st.warning("No traces found matching the current filter!")
@@ -112,16 +114,29 @@ def main():
         st.text_area("Model Thoughts", row["Model Thoughts"], height=150, disabled=True)
         st.text_area("Model Answer", row["Answer"], height=150, disabled=True)
 
-    # 6) Edit Ideal Answer - give it a dynamic key
-    st.subheader("Ideal Answer Given Inputs (Metadata)")
+    # 6) Edit Ideal Answers and Comment - give them dynamic keys
+    st.subheader("Ideal Answers and Comments (Metadata)")
+    
     edited_ideal_answer = st.text_area(
-        "ideal_answer_given_inputs",
-        value=row["ideal_answer_given_inputs"],
+        "ideal_answer (The best possible answer regardless of context)",
+        value=row["ideal_answer"],
         height=150,
         key=f"ideal_answer_{selected_trace_id}"
     )
-    print("Ideal Answer Given Inputs (Metadata)", row)
-    print("Ideal Answer Given Inputs (Metadata)", {row["ideal_answer_given_inputs"]})
+    
+    edited_ideal_answer_given_inputs = st.text_area(
+        "ideal_answer_given_inputs (The best possible answer given the retrieved context)",
+        value=row["ideal_answer_given_inputs"],
+        height=150,
+        key=f"ideal_answer_given_inputs_{selected_trace_id}"
+    )
+
+    edited_comment = st.text_area(
+        "Comment (Any additional notes or observations)",
+        value=row.get("comment", ""),
+        height=150,
+        key=f"comment_{selected_trace_id}"
+    )
 
     # 7) Dynamic Score Inputs
     st.subheader("Scores")
@@ -199,8 +214,13 @@ def main():
     # 8) Save Changes Button
     if st.button("Save Changes"):
         print("Save Changes clicked")
-        # 1) Update the trace's ideal answer
-        client.update_trace_ideal_answer(selected_trace_id, edited_ideal_answer)
+        # 1) Update the trace's ideal answers and comment
+        client.update_trace_ideal_answer(
+            selected_trace_id, 
+            edited_ideal_answer,
+            edited_ideal_answer_given_inputs,
+            edited_comment
+        )
 
         # 2) For each active score config, only create/update if value is not None
         for config in score_configs:
@@ -230,7 +250,9 @@ def main():
                 client.create_or_update_score(**kwargs)
 
         # Update session state DataFrame
-        st.session_state.current_df.loc[df["ID"] == selected_trace_id, "ideal_answer_given_inputs"] = edited_ideal_answer
+        st.session_state.current_df.loc[df["ID"] == selected_trace_id, "ideal_answer"] = edited_ideal_answer
+        st.session_state.current_df.loc[df["ID"] == selected_trace_id, "ideal_answer_given_inputs"] = edited_ideal_answer_given_inputs
+        st.session_state.current_df.loc[df["ID"] == selected_trace_id, "comment"] = edited_comment
         
         # Update scores in the session state DataFrame
         for config in score_configs:

@@ -81,15 +81,16 @@ class LangfuseClient:
         print("Exiting function: load_traces_as_dataframe")
         return df
 
-    def update_trace_ideal_answer(self, trace_id: str, ideal_answer: str) -> None:
+    def update_trace_ideal_answer(self, trace_id: str, ideal_answer: str, ideal_answer_given_inputs: str, comment: str) -> None:
         """
-        Upsert the trace with updated metadata['ideal_answer_given_inputs']
-        using langfuse.trace().
+        Upsert the trace with metadata including ideal answers and comment.
         """
         print("Entered function: update_trace_ideal_answer")
         trace_obj = self._client.get_trace(trace_id)
         old_metadata = trace_obj.metadata or {}
-        old_metadata["ideal_answer_given_inputs"] = ideal_answer
+        old_metadata["ideal_answer"] = ideal_answer
+        old_metadata["ideal_answer_given_inputs"] = ideal_answer_given_inputs
+        old_metadata["comment"] = comment
         self._client.trace(id=trace_obj.id, metadata=old_metadata)
         print("Exiting function: update_trace_ideal_answer")
 
@@ -242,7 +243,8 @@ class LangfuseClient:
                 ctx_text += f"[Context {i}]\nLink: {link}\nCosine Distance: {dist}\n\n"
 
             original_answer = trace.output if trace.output else ""
-            ideal_answer = trace.metadata.get("ideal_answer_given_inputs", "")
+            ideal_answer = trace.metadata.get("ideal_answer", "")
+            ideal_answer_given_inputs = trace.metadata.get("ideal_answer_given_inputs", "")
 
             row = {
                 "ID": trace.id,
@@ -253,7 +255,9 @@ class LangfuseClient:
                 "Model Thoughts": model_thoughts,
                 "Answer": original_answer,
                 "Expected Answer": original_answer,
-                "ideal_answer_given_inputs": ideal_answer,
+                "ideal_answer": ideal_answer,
+                "ideal_answer_given_inputs": ideal_answer_given_inputs,
+                "comment": trace.metadata.get("comment", ""),
                 "Name": trace.name,
                 "Tags": ", ".join(trace.tags) if trace.tags else "",
             }
