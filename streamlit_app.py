@@ -7,7 +7,6 @@ LANGFUSE_PUBLIC_KEY = st.secrets["LANGFUSE_PUBLIC_KEY"]
 LANGFUSE_SECRET_KEY = st.secrets["LANGFUSE_SECRET_KEY"]
 LANGFUSE_HOST = st.secrets["LANGFUSE_HOST"]
 
-
 @st.cache_resource
 def get_langfuse_client() -> LangfuseClient:
     print("Entered function: get_langfuse_client")
@@ -19,30 +18,20 @@ def get_langfuse_client() -> LangfuseClient:
     print("Exiting function: get_langfuse_client")
     return client
 
-
 @st.cache_data
 def load_data(_client: LangfuseClient) -> pd.DataFrame:
-    """
-    Fetch the DataFrame of traces from the LangfuseClient.
-    The leading underscore in _client tells Streamlit not to hash it.
-    """
     print("Entered function: load_data")
     df = _client.load_traces_as_dataframe()
     print("Exiting function: load_data")
     return df
 
-
 @st.cache_data
 def load_active_score_configs(_client: LangfuseClient) -> list:
-    """
-    Fetch all score configs, filter out archived ones, return them as a list.
-    """
     print("Entered function: load_active_score_configs")
     raw_configs = _client.list_score_configs()
     active = [c for c in raw_configs if not c.get("isArchived")]
     print("Exiting function: load_active_score_configs")
     return active
-
 
 def main():
     print("Entered function: main")
@@ -64,7 +53,6 @@ def main():
     )
 
     if show_only_unreviewed:
-        # Filter traces where 'ideal_answer_given_inputs' is empty or NaN
         filtered_df = df[df["ideal_answer_given_inputs"].isnull() | (df["ideal_answer_given_inputs"] == "")]
         st.sidebar.write(f"**Traces needing review:** {filtered_df.shape[0]}")
     else:
@@ -76,13 +64,22 @@ def main():
         print("Exiting function: main (no traces found after filtering)")
         return
 
-    # 4) Select a trace from the filtered DataFrame
-    st.subheader("Select a Trace")
-    trace_ids = filtered_df["ID"].tolist()
-    selected_trace_id = st.selectbox("Trace ID", options=trace_ids)
-    row = filtered_df[filtered_df["ID"] == selected_trace_id].iloc[0]
+    # 4) Sort by timestamp DESC and select by index
+    filtered_df = filtered_df.sort_values(by="Timestamp", ascending=False).reset_index(drop=True)
 
-    # 5) Display trace information
+    st.subheader("Select a Trace by Timestamp")
+
+    # Use the row index in the selectbox, but show the Timestamp as the label
+    selected_index = st.selectbox(
+        label="Traces",
+        options=filtered_df.index,  # integer indexes
+        format_func=lambda i: filtered_df.loc[i, "Timestamp"]  # show timestamp as label
+    )
+
+    row = filtered_df.loc[selected_index]
+    selected_trace_id = row["ID"]  # keep track of the real ID internally
+
+    # 5) Display trace information (no more ID shown in UI)
     st.write(f"**Timestamp:** {row['Timestamp']}")
     st.write(f"**Name / Tags:** {row['Name']} / {row['Tags']}")
 
@@ -118,7 +115,6 @@ def main():
                 # Insert "<None>" as an option
                 all_labels = ["<None>"] + [cat["label"] for cat in categories]
 
-                # Find default index
                 default_index = 0
                 if old_val in all_labels:
                     default_index = all_labels.index(old_val)
@@ -128,13 +124,11 @@ def main():
                     options=all_labels,
                     index=default_index if default_index < len(all_labels) else 0
                 )
-                # If user picks "<None>", store None -> means no score update
                 if selected_label == "<None>":
                     new_score_values[score_name] = None
                 else:
                     new_score_values[score_name] = selected_label
             else:
-                # No categories => treat as text input
                 new_val = st.text_input(label_for_score, value=str(old_val))
                 if not new_val.strip():
                     new_score_values[score_name] = None
@@ -192,7 +186,7 @@ def main():
                         trace_id=selected_trace_id,
                         name=score_name,
                         data_type="CATEGORICAL",
-                        string_value=str(new_val)  # pass the text
+                        string_value=str(new_val)
                     )
                 elif data_type == "NUMERIC":
                     try:
@@ -211,10 +205,9 @@ def main():
                         trace_id=selected_trace_id,
                         name=score_name,
                         data_type="BOOLEAN",
-                        value=bool_val  # internally converted to 1.0 or 0.0
+                        value=bool_val
                     )
                 else:
-                    # Fallback => treat as CATEGORICAL text
                     client.create_or_update_score(
                         trace_id=selected_trace_id,
                         name=score_name,
@@ -226,7 +219,8 @@ def main():
         client.export_to_csv(updated_df, OUTPUT_FILE)
 
         print("Save Changes completed, rerunning app")
-        st.rerun()
+        st.success("Trace data and scores updated successfully!")
+        # st.rerun()
 
     print("Exiting function: main")
 

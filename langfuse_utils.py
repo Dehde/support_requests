@@ -224,14 +224,16 @@ class LangfuseClient:
     # 3) BUILD DATAFRAME ROWS
     # -------------------------------------------------------------------------
     def create_data_rows(
-        self,
-        traces: List[TraceWithDetails],
-        trace_scores_map: Dict[str, List[Dict[str, Any]]]
+            self,
+            traces: List[TraceWithDetails],
+            trace_scores_map: Dict[str, List[Dict[str, Any]]]
     ) -> List[Dict[str, Any]]:
         print("Entered function: create_data_rows")
         rows = []
         for trace in traces:
-            ts_str = trace.timestamp.strftime("%Y-%m-%d %H:%M")
+            # Include seconds in your timestamp
+            ts_str = trace.timestamp.strftime("%Y-%m-%d %H:%M:%S")  # Changed here
+
             user_q = trace.metadata.get("user_question", "")
             model_thoughts = trace.metadata.get("model_thoughts", "")
 
@@ -272,13 +274,8 @@ class LangfuseClient:
             scores_for_trace = trace_scores_map.get(trace.id, [])
             for sc in scores_for_trace:
                 name = sc.get("name", "")
-                # sc might have "value", "comment", etc.
-                # We'll do a guess: If 'comment' is present, let's store that.
-                # Otherwise store 'value'.
                 val = sc.get("value", None)
                 com = sc.get("comment", None)
-
-                # We'll decide how to display it. If there's a comment, use it, else string of val
                 if com is not None and com != "":
                     row[name] = com
                 elif val is not None:
