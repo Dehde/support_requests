@@ -7,6 +7,7 @@ from typing import List, Dict, Any
 from collections import defaultdict
 from langfuse import Langfuse
 from trace_model import LangfuseTrace
+from langfuse.api.resources.commons.types.trace_with_details import TraceWithDetails
 
 START_DATE = "2024-12-17"
 TARGET_TAG = "app_id=d6bfd7f4-39a0-4824-8720-a8b79d32f586"
@@ -46,29 +47,14 @@ class LangfuseClient:
     # -------------------------------------------------------------------------
     # 1) TRACES & METADATA
     # -------------------------------------------------------------------------
-    def fetch_filtered_traces(self) -> List[LangfuseTrace]:
+    def fetch_filtered_traces(self) -> List[TraceWithDetails]:
         print("Entered function: fetch_filtered_traces")
         client = self._init_client()
         start_dt = pd.to_datetime(START_DATE, utc=True)
-        response = client.fetch_traces(tags=[TARGET_TAG])
+        response = client.fetch_traces(tags=[TARGET_TAG], from_timestamp=start_dt)
         all_traces = response.data
-
-        filtered = []
-        for t in all_traces:
-            trace_dt_utc = pd.to_datetime(t.timestamp, utc=True)
-            if trace_dt_utc >= start_dt:
-                filtered.append(
-                    LangfuseTrace(
-                        id=t.id,
-                        name=t.name,
-                        tags=t.tags or [],
-                        timestamp=trace_dt_utc,
-                        metadata=t.metadata or {},
-                        output=t.output
-                    )
-                )
         print("Exiting function: fetch_filtered_traces")
-        return filtered
+        return all_traces
 
     def load_traces_as_dataframe(self) -> pd.DataFrame:
         print("Entered function: load_traces_as_dataframe")
@@ -313,3 +299,26 @@ class LangfuseClient:
         print("Entered function: export_to_csv")
         df.to_csv(file_name, index=False)
         print("Exiting function: export_to_csv")
+
+
+if __name__ == "__main__":
+    import sys
+    import streamlit as st
+
+    LANGFUSE_PUBLIC_KEY = st.secrets["LANGFUSE_PUBLIC_KEY"]
+    LANGFUSE_SECRET_KEY = st.secrets["LANGFUSE_SECRET_KEY"]
+    LANGFUSE_HOST = st.secrets["LANGFUSE_HOST"]
+
+    client = LangfuseClient(public_key=LANGFUSE_PUBLIC_KEY, secret_key=LANGFUSE_SECRET_KEY, host=LANGFUSE_HOST)
+    try:
+        print("Loading traces as DataFrame...")
+        df = client.load_traces_as_dataframe()
+        print(f"Loaded {len(df)} traces.")
+
+        print(f"Exporting DataFrame to {OUTPUT_FILE}...")
+        client.export_to_csv(df)
+        print(f"Successfully exported traces to {OUTPUT_FILE}.")
+
+    except Exception as e:
+        print(f"An error occurred: {e}", file=sys.stderr)
+        sys.exit(1)
