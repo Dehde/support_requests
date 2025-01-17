@@ -31,11 +31,7 @@ class LangfuseClient:
         self.public_key = public_key
         self.secret_key = secret_key
         self.host = host
-        self._client = Langfuse(
-                public_key=self.public_key,
-                secret_key=self.secret_key,
-                host=self.host
-            )
+        self._client = Langfuse(public_key=self.public_key, secret_key=self.secret_key, host=self.host)
 
     def fetch_filtered_traces(self) -> List[TraceWithDetails]:
         print("Entered function: fetch_filtered_traces")
@@ -49,22 +45,13 @@ class LangfuseClient:
             return self._client.fetch_trace(trace_id).data
         
         while True:
-            response = self._client.fetch_traces(
-                tags=[TARGET_TAG],
-                from_timestamp=start_dt,
-                to_timestamp=end_dt,
-                limit=limit,
-                page=page
-            )
+            response = self._client.fetch_traces(tags=[TARGET_TAG], from_timestamp=start_dt, to_timestamp=end_dt, limit=limit, page=page)
             
             # Use ThreadPoolExecutor to fetch fresh traces in parallel
             fresh_traces = []
             with ThreadPoolExecutor(max_workers=10) as executor:
                 # Submit all trace fetching tasks
-                future_to_trace = {
-                    executor.submit(fetch_single_trace, trace.id): trace.id 
-                    for trace in response.data
-                }
+                future_to_trace = {executor.submit(fetch_single_trace, trace.id): trace.id for trace in response.data}
                 
                 # Collect results as they complete
                 for future in as_completed(future_to_trace):
