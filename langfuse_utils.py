@@ -8,6 +8,7 @@ from collections import defaultdict
 from langfuse import Langfuse
 from langfuse.api.resources.commons.types.trace_with_details import TraceWithDetails
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 START_DATE = "2024-12-17"
 TARGET_TAG = "app_id=d6bfd7f4-39a0-4824-8720-a8b79d32f586"
@@ -38,13 +39,15 @@ class LangfuseClient:
 
     def fetch_filtered_traces(self) -> List[TraceWithDetails]:
         print("Entered function: fetch_filtered_traces")
-        # Convert your START_DATE to a UTC-aware datetime if it isn't already
         start_dt = pd.to_datetime(START_DATE, utc=True)
         end_dt = pd.Timestamp.now(tz='UTC')
         all_traces = []
-        limit = 100  # The API default is typically 50, you can adjust as needed
+        limit = 100
         page = 1
-        # Keep fetching traces until a page returns fewer than 'limit' results
+        
+        def fetch_single_trace(trace_id):
+            return self._client.fetch_trace(trace_id).data
+        
         while True:
             response = self._client.fetch_traces(
                 tags=[TARGET_TAG],
@@ -53,12 +56,32 @@ class LangfuseClient:
                 limit=limit,
                 page=page
             )
-            all_traces.extend(response.data)
-            print(f"Fetched {len(response.data)} trace(s) for page={page}")
-            # If the response has fewer than 'limit' items, it's the last page
+            
+            # Use ThreadPoolExecutor to fetch fresh traces in parallel
+            fresh_traces = []
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                # Submit all trace fetching tasks
+                future_to_trace = {
+                    executor.submit(fetch_single_trace, trace.id): trace.id 
+                    for trace in response.data
+                }
+                
+                # Collect results as they complete
+                for future in as_completed(future_to_trace):
+                    trace_id = future_to_trace[future]
+                    try:
+                        fresh_trace = future.result()
+                        fresh_traces.append(fresh_trace)
+                    except Exception as e:
+                        print(f"Error fetching trace {trace_id}: {e}")
+            
+            all_traces.extend(fresh_traces)
+            print(f"Fetched {len(fresh_traces)} trace(s) for page={page}")
+            
             if len(response.data) < limit:
                 break
             page += 1
+            
         print(f"Exiting function: fetch_filtered_traces. Total: {len(all_traces)} trace(s).")
         return all_traces
 

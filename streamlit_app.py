@@ -27,10 +27,8 @@ def get_current_date_key() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
-@st.cache_data
-def load_data_for_date(_client: LangfuseClient, date_key: str) -> pd.DataFrame:
+def load_data_for_date(_client: LangfuseClient) -> pd.DataFrame:
     """Loads data from API - cached separately for each date"""
-    print(f"Loading fresh data for date: {date_key}")
     return _client.load_traces_as_dataframe()
 
 
@@ -47,19 +45,15 @@ def main():
     print("Entered function: main")
     st.title("Langfuse Trace Reviewer + Dynamic Scores")
 
-    # 1) Initialize client
     client = get_langfuse_client()
-
-    # 2) Load trace data & score configs - with date checking
     today_key = get_current_date_key()
     
     # Initialize or update session state based on date
     if "current_df" not in st.session_state or "last_load_date" not in st.session_state or st.session_state.last_load_date != today_key:
-        st.session_state.current_df = load_data_for_date(client, today_key)
+        st.session_state.current_df = load_data_for_date(client)
         st.session_state.last_load_date = today_key
     
     df = st.session_state.current_df
-    
     score_configs = load_active_score_configs(client)
 
     # 3) Add a checkbox to filter unreviewed traces
