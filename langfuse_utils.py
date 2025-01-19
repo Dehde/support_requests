@@ -41,26 +41,8 @@ class LangfuseClient:
         limit = 100
         page = 1
         
-        # def fetch_single_trace(trace_id):
-        #     return self._client.fetch_trace(trace_id).data
-        
         while True:
             response = self._client.fetch_traces(tags=[TARGET_TAG], from_timestamp=start_dt, to_timestamp=end_dt, limit=limit, page=page)
-            
-            # # Use ThreadPoolExecutor to fetch fresh traces in parallel
-            # fresh_traces = []
-            # with ThreadPoolExecutor(max_workers=10) as executor:
-            #     # Submit all trace fetching tasks
-            #     future_to_trace = {executor.submit(fetch_single_trace, trace.id): trace.id for trace in response.data}
-            #
-            #     # Collect results as they complete
-            #     for future in as_completed(future_to_trace):
-            #         trace_id = future_to_trace[future]
-            #         try:
-            #             fresh_trace = future.result()
-            #             fresh_traces.append(fresh_trace)
-            #         except Exception as e:
-            #             print(f"Error fetching trace {trace_id}: {e}")
             fresh_traces = response.data
             all_traces.extend(fresh_traces)
             print(f"Fetched {len(fresh_traces)} trace(s) for page={page}")
