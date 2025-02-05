@@ -56,20 +56,25 @@ def main():
     df = st.session_state.current_df
     score_configs = load_active_score_configs(client)
 
-    # 3) Add a checkbox to filter unreviewed traces
+    # 3) Add radio buttons to filter traces
     st.sidebar.header("Filters")
-    show_only_unreviewed = st.sidebar.checkbox(
-        "Show only traces needing review",
-        value=True,
-        help="Check this to display only traces that haven't been reviewed yet."
+    filter_option = st.sidebar.radio(
+        "Filter traces",
+        options=["Show all traces", "Show only unlabelled traces", "Show only labelled traces"],
+        help="Select which traces to display based on their review status."
     )
+    
     df_not_reviewed = df[df["ideal_answer"].isnull() | (df["ideal_answer"] == "")]
-    st.sidebar.write(f"**Traces needing review:** {df_not_reviewed.shape[0]}")
+    df_reviewed = df[df["ideal_answer"].notna() & (df["ideal_answer"] != "")]
+    
+    st.sidebar.write(f"**Unlabelled traces:** {df_not_reviewed.shape[0]}")
+    st.sidebar.write(f"**Labelled traces:** {df_reviewed.shape[0]}")
     st.sidebar.write(f"**Total traces:** {df.shape[0]}")
 
-    if show_only_unreviewed:
+    if filter_option == "Show only unlabelled traces":
         filtered_df = df_not_reviewed
-        
+    elif filter_option == "Show only labelled traces":
+        filtered_df = df_reviewed
     else:
         filtered_df = df
 
