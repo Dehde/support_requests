@@ -69,32 +69,34 @@ def main():
         help="Select which traces to display based on their review status."
     )
     
-    df_not_reviewed = df[df["ideal_answer"].isnull() | (df["ideal_answer"] == "")]
-    df_reviewed = df[df["ideal_answer"].notna() & (df["ideal_answer"] != "")]
-    
-    # Prepare context_still_missing calculation
+    # Move DataFrame preparation before filtering
+    # Prepare context_still_missing calculation for all data
     if 'context_missing' in df.columns:
         df['context_missing'] = pd.to_numeric(df['context_missing'], errors='coerce')
     if 'context_added' in df.columns:
         df['context_added'] = pd.to_numeric(df['context_added'], errors='coerce')
-        # Fill NaN/None values with 0 (False)
         df['context_added'] = df['context_added'].fillna(0)
     else:
-        df['context_added'] = 0  # Default to False if column doesn't exist
+        df['context_added'] = 0
     
     df['context_still_missing'] = (
         (df['context_missing'] == 1) & 
-        (df['context_added'] != 1)  # Changed from == 0 to != 1
+        (df['context_added'] != 1)
     ).astype(int)
     
+    # Prepare filtered DataFrames
+    df_not_reviewed = df[df["ideal_answer"].isnull() | (df["ideal_answer"] == "")]
+    df_reviewed = df[df["ideal_answer"].notna() & (df["ideal_answer"] != "")]
     df_missing_context = df[df['context_still_missing'] == 1]
     
+    # Display sidebar statistics
     st.sidebar.write(f"**Unlabelled traces:** {df_not_reviewed.shape[0]}")
     st.sidebar.write(f"**Labelled traces:** {df_reviewed.shape[0]}")
     st.sidebar.write(f"**Traces with missing context:** {df_missing_context.shape[0]}")
     st.sidebar.write(f"**Total unique traces:** {df.shape[0]}")
     st.sidebar.write(f"**Total traces:** {df.attrs.get('total_traces_count', df.shape[0])}")
 
+    # Apply filter selection
     if filter_option == "Show only unlabelled traces":
         filtered_df = df_not_reviewed
     elif filter_option == "Show only labelled traces":
@@ -104,22 +106,15 @@ def main():
         st.sidebar.markdown("---")
         st.sidebar.header("Monthly Statistics")
         
-        # Convert columns to numeric, coercing errors to NaN
+        # Convert columns to numeric for statistics
+        filtered_df = filtered_df.copy()  # Create a copy to avoid SettingWithCopyWarning
         if 'HumanAnswerCorrectness' in filtered_df.columns:
             filtered_df['HumanAnswerCorrectness'] = pd.to_numeric(filtered_df['HumanAnswerCorrectness'], errors='coerce')
-        if 'context_missing' in filtered_df.columns:
-            filtered_df['context_missing'] = pd.to_numeric(filtered_df['context_missing'], errors='coerce')
-        if 'context_added' in filtered_df.columns:
-            filtered_df['context_added'] = pd.to_numeric(filtered_df['context_added'], errors='coerce')
-            # Fill NaN/None values with 0 (False)
-            filtered_df['context_added'] = filtered_df['context_added'].fillna(0)
-        else:
-            filtered_df['context_added'] = 0  # Default to False if column doesn't exist
         
         # Calculate context_still_missing
         filtered_df['context_still_missing'] = (
             (filtered_df['context_missing'] == 1) & 
-            (filtered_df['context_added'] != 1)
+            (filtered_df['context_added'] == 0)
         ).astype(int)
         
         # Group by month and calculate statistics
@@ -149,7 +144,7 @@ def main():
     elif filter_option == "Show only traces with missing context":
         filtered_df = df_missing_context
     else:
-        filtered_df = df
+        filtered_df = df.copy()  # Create a copy of the full DataFrame
 
     if filtered_df.empty:
         st.warning("No traces found matching the current filter!")
