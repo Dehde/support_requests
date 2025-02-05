@@ -9,6 +9,7 @@ from langfuse import Langfuse
 from langfuse.api.resources.commons.types.trace_with_details import TraceWithDetails
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pprint import pprint
 
 START_DATE = "2024-12-17"
 TARGET_TAG = "app_id=d6bfd7f4-39a0-4824-8720-a8b79d32f586"
@@ -56,25 +57,64 @@ class LangfuseClient:
 
     def load_traces_as_dataframe(self) -> pd.DataFrame:
         print("Entered function: load_traces_as_dataframe")
+        
+        # Load traces and scores
         traces = self.fetch_filtered_traces()
         scores = self.request_scores()
         scores_map = self.build_trace_scores_map(scores)
-        rows = self.create_data_rows(traces, scores_map)
-        df = pd.DataFrame(rows)
-
-        # Deduplicate based on 'User Question', keeping the first occurrence
-        df = df.drop_duplicates(subset=['User Question'], keep='first')
-
-        preferred_cols = [
-            "ID", "Timestamp", "User Question", "Conversation History",
-            "Retrieved Context", "Model Thoughts", "Answer", "Expected Answer",
-            "ideal_answer_given_inputs",
-            "Name", "Tags"
-        ]
-        existing_cols = [c for c in preferred_cols if c in df.columns]
-        df = df.reindex(columns=existing_cols + [c for c in df.columns if c not in existing_cols])
+        data_rows = self.create_data_rows(traces, scores_map)
+        
+        # Create DataFrame
+        df = pd.DataFrame(data_rows)
+        
+        # Only drop duplicates if the column exists
+        if 'User Question' in df.columns:
+            df = df.drop_duplicates(subset=['User Question'], keep='first')
+        
+        # Analyze and print statistics
+        self._analyze_scores(df)
+        
         print("Exiting function: load_traces_as_dataframe")
         return df
+
+    def _analyze_scores(self, df: pd.DataFrame) -> None:
+        """Analyze and print score statistics."""
+        print(f"\nTotal traces loaded: {len(df)}")
+        
+        # Find boolean score columns
+        bool_columns = [col for col in df.columns if col in [
+            'context_added', 'user_question_needs_clarification', 
+            'llm_failure', 'context_missing', 'retrieval_failure'
+        ]]
+        
+        if bool_columns:
+            print(f"\nFound boolean score columns: {bool_columns}")
+            print("\nAnalyzing boolean scores...")
+            
+            for col in bool_columns:
+                true_count = df[col].eq(True).sum()
+                false_count = df[col].eq(False).sum()
+                null_count = df[col].isna().sum()
+                
+                print(f"\n{col}:")
+                print(f"  True values: {true_count}")
+                print(f"  False values: {false_count}")
+                print(f"  Null values: {null_count}")
+                
+                if true_count > 0:
+                    print("\n  Examples of True values:")
+                    true_examples = df[df[col] == True]['ID'].head(3)
+                    for trace_id in true_examples:
+                        print(f"    Trace ID: {trace_id}, Value: {df[df['ID'] == trace_id][col].iloc[0]}")
+        
+        # Count traces with at least one score
+        traces_with_scores = df[bool_columns].notna().any(axis=1).sum()
+        print(f"\nTraces with at least one score: {traces_with_scores}")
+        
+        if traces_with_scores > 0:
+            print("\nFirst few traces with scores:")
+            traces_with_any_score = df[df[bool_columns].notna().any(axis=1)]
+            print(traces_with_any_score[['ID', 'Timestamp'] + bool_columns].head().to_string())
 
     def update_trace_ideal_answer(self, trace_id: str, ideal_answer: str, ideal_answer_given_inputs: str, comment: str) -> None:
         """
@@ -91,15 +131,30 @@ class LangfuseClient:
 
     def request_scores(self) -> List[Dict[str, Any]]:
         print("Entered function: request_scores")
-        resp = requests.get(
-            f"{self.host}/api/public/scores",
-            auth=HTTPBasicAuth(self.public_key, self.secret_key),
-            headers={"Content-Type": "application/json"}
-        )
-        resp.raise_for_status()
-        data = resp.json().get("data", [])
+        all_scores = []
+        page = 1
+        
+        while True:
+            url = f"{self.host}/api/public/scores"
+            resp = requests.get(
+                url,
+                auth=HTTPBasicAuth(self.public_key, self.secret_key),
+                headers={"Content-Type": "application/json"},
+                params={"page": page, "limit": 100}  # increased from 50 to 100 per page
+            )
+            resp.raise_for_status()
+            
+            scores = resp.json().get("data", [])
+            if not scores:  # No more scores to fetch
+                break
+            
+            print(f"Fetched {len(scores)} score(s) for page={page}")
+            all_scores.extend(scores)
+            page += 1
+        
+        print(f"Total scores fetched: {len(all_scores)}")
         print("Exiting function: request_scores")
-        return data
+        return all_scores
 
     def build_trace_scores_map(self, scores: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
         print("Entered function: build_trace_scores_map")
@@ -211,13 +266,10 @@ class LangfuseClient:
     # -------------------------------------------------------------------------
     # 3) BUILD DATAFRAME ROWS
     # -------------------------------------------------------------------------
-    def create_data_rows(
-            self,
-            traces: List[TraceWithDetails],
-            trace_scores_map: Dict[str, List[Dict[str, Any]]]
-    ) -> List[Dict[str, Any]]:
+    def create_data_rows(self, traces: List[TraceWithDetails], trace_scores_map: Dict[str, List[Dict[str, Any]]]) -> List[dict]:
         print("Entered function: create_data_rows")
-        rows = []
+        data_rows = []
+        
         for trace in traces:
             ts_str = trace.timestamp.strftime("%Y-%m-%d %H:%M:%S")  # Changed here
             user_q = trace.metadata.get("user_question", "")
@@ -227,7 +279,9 @@ class LangfuseClient:
                 f"{e.get('role', 'unknown')}: {e.get('content', '')}"
                 for e in conv_entries
             )
-            retrieved_contexts = trace.metadata.get("retrieved_contexts", [])
+            
+            # Process retrieved contexts
+            retrieved_contexts = trace.metadata.get("retrieved_contexts", []) if trace.metadata else []
             retrieved_contexts_sorted = sorted(
                 retrieved_contexts, key=lambda c: c.get("cosine_distance", 9999)
             )[:5]
@@ -256,24 +310,62 @@ class LangfuseClient:
                 "Name": trace.name,
                 "Tags": ", ".join(trace.tags) if trace.tags else "",
             }
-
-            # Attach any existing scores
-            scores_for_trace = trace_scores_map.get(trace.id, [])
-            for sc in scores_for_trace:
-                name = sc.get("name", "")
-                val = sc.get("value", None)
-                com = sc.get("comment", None)
-                if com is not None and com != "":
-                    row[name] = com
-                elif val is not None:
-                    row[name] = str(val)
+            
+            # Process scores
+            scores = trace_scores_map.get(trace.id, [])
+            for score in scores:
+                name = score.get("name", "")
+                value = score.get("value")
+                comment = score.get("comment")
+                
+                if comment and comment != "":
+                    row[name] = comment
+                elif value is not None:
+                    row[name] = str(value)
                 else:
                     row[name] = ""
-
-            rows.append(row)
-
+            
+            data_rows.append(row)
+        
         print("Exiting function: create_data_rows")
-        return rows
+        return data_rows
+
+    def get_latest_scores_by_name(self, scores: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        scores_by_name = defaultdict(list)
+        for sc in scores:
+            scores_by_name[sc.get('name', '')].append(sc)
+        
+        latest_scores = {}
+        for name, scores in scores_by_name.items():
+            # Sort by timestamp descending
+            sorted_scores = sorted(scores, key=lambda x: x.get('timestamp', ''), reverse=True)
+            latest = sorted_scores[0]
+            
+            latest_scores[name] = latest
+        
+        return latest_scores
+
+    def process_score_value(self, score: Dict[str, Any]) -> Any:
+        data_type = score.get('dataType', 'CATEGORICAL')
+        
+        if data_type == "BOOLEAN":
+            raw_val = score.get("value")
+            if raw_val is None:
+                val = None
+            elif isinstance(raw_val, bool):
+                val = raw_val
+            elif isinstance(raw_val, (int, float)):
+                val = bool(raw_val)
+            elif isinstance(raw_val, str):
+                val = raw_val.lower() == "true"
+            else:
+                val = None
+        elif data_type == "NUMERIC":
+            val = score.get("value")
+        else:  # CATEGORICAL or fallback
+            val = score.get("stringValue", str(score.get("value", "")))
+        
+        return val
 
     # -------------------------------------------------------------------------
     # CSV Export (optional)
@@ -301,30 +393,16 @@ class LangfuseClient:
 
 
 if __name__ == "__main__":
-    import sys
     import streamlit as st
+    from collections import defaultdict
 
-    LANGFUSE_PUBLIC_KEY = st.secrets["LANGFUSE_PUBLIC_KEY"]
-    LANGFUSE_SECRET_KEY = st.secrets["LANGFUSE_SECRET_KEY"]
-    LANGFUSE_HOST = st.secrets["LANGFUSE_HOST"]
+    # Initialize client
+    client = LangfuseClient(
+        public_key=st.secrets["LANGFUSE_PUBLIC_KEY"],
+        secret_key=st.secrets["LANGFUSE_SECRET_KEY"],
+        host=st.secrets["LANGFUSE_HOST"]
+    )
 
-    client = LangfuseClient(public_key=LANGFUSE_PUBLIC_KEY, secret_key=LANGFUSE_SECRET_KEY, host=LANGFUSE_HOST)
-    try:
-        print("Loading traces as DataFrame...")
-        df = client.load_traces_as_dataframe()
-        print(f"Loaded {len(df)} traces.")
-
-        # Test updating a single trace - let's use the first one
-        if not df.empty:
-            test_trace_id = df.iloc[0]['ID']
-            print(f"\nTesting single trace update for ID: {test_trace_id}")
-            updated_df = client.update_trace_in_df(df, test_trace_id)
-            print("Successfully updated trace in DataFrame")
-
-        print(f"\nExporting DataFrame to {OUTPUT_FILE}...")
-        client.export_to_csv(df)
-        print(f"Successfully exported traces to {OUTPUT_FILE}.")
-
-    except Exception as e:
-        print(f"An error occurred: {e}", file=sys.stderr)
-        sys.exit(1)
+    # Load traces
+    print("\nLoading traces...")
+    df = client.load_traces_as_dataframe()
