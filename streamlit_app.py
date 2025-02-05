@@ -43,7 +43,7 @@ def load_active_score_configs(_client: LangfuseClient) -> list:
 
 def main():
     print("Entered function: main")
-    st.title("Langfuse Trace Reviewer + Dynamic Scores")
+    st.title("Mainteny Support Dashboard")
 
     client = get_langfuse_client()
     today_key = get_current_date_key()
@@ -122,13 +122,19 @@ def main():
     )
 
     selected_trace_id = month_traces.loc[selected_index]["ID"]
-    print(selected_trace_id)
+    print(f"\nProcessing trace: {selected_trace_id}")
     
     # Add trace ID display
     st.write(f"**Trace ID:** {selected_trace_id}")
     
     st.session_state.current_df = client.update_trace_in_df(st.session_state.current_df, selected_trace_id)
     row = st.session_state.current_df[st.session_state.current_df['ID'] == selected_trace_id].iloc[0]
+    
+    print("\nCurrent score values:")
+    for config in score_configs:
+        score_name = config["name"]
+        current_value = row.get(score_name)
+        print(f"  {score_name}: {current_value} (type: {type(current_value)})")
 
     # 5) Display trace information
     st.write(f"**Timestamp:** {row['Timestamp']}")
@@ -171,70 +177,64 @@ def main():
     st.subheader("Scores")
     new_score_values = {}
 
+    # Score display section
     for config in score_configs:
         score_name = config["name"]
         data_type = config["dataType"]
-        categories = config.get("categories", [])
+        
+        # Get existing value without converting None to False
+        current_value = row.get(score_name)
+        print(f"\nProcessing score {score_name}:")
+        print(f"  Current value: {current_value} (type: {type(current_value)})")
 
-        old_val = row.get(score_name, "")  # existing score value from DF
-        label_for_score = f"{score_name} ({data_type})"
-
-        # We'll include the trace ID in the key so each trace gets its own widget state
-        dynamic_key = f"{score_name}_{selected_trace_id}"
-
-        if data_type == "CATEGORICAL":
-            if categories:
-                all_labels = ["<None>"] + [cat["label"] for cat in categories]
-                default_index = 0
-                if old_val in all_labels:
-                    default_index = all_labels.index(old_val)
-
-                selected_label = st.selectbox(
-                    label_for_score,
-                    options=all_labels,
-                    index=default_index if default_index < len(all_labels) else 0,
-                    key=dynamic_key
-                )
-                if selected_label == "<None>":
-                    new_score_values[score_name] = None
-                else:
-                    new_score_values[score_name] = selected_label
-            else:
-                new_val = st.text_input(label_for_score, value=str(old_val), key=dynamic_key)
-                if not new_val.strip():
-                    new_score_values[score_name] = None
-                else:
-                    new_score_values[score_name] = new_val
+        if data_type == "BOOLEAN":
+            # Handle string values like "0", "1" and NaN values properly
+            display_value = False  # Default to unchecked
+            
+            if pd.notna(current_value):  # This handles both None and np.nan
+                if isinstance(current_value, bool):
+                    display_value = current_value
+                elif isinstance(current_value, (int, float)):
+                    display_value = bool(current_value)
+                elif isinstance(current_value, str):
+                    # Convert string "1" or "true" to True, everything else to False
+                    display_value = current_value.lower() in ("1", "true")
+            
+            print(f"  Display value after conversion: {display_value}")
+            new_bool = st.checkbox(f"{score_name} ({data_type})", value=display_value)
+            new_score_values[score_name] = new_bool
 
         elif data_type == "NUMERIC":
-            min_val = config.get("minValue", None)
-            max_val = config.get("maxValue", None)
-            if isinstance(min_val, int):
-                min_val = float(min_val)
-            if isinstance(max_val, int):
-                max_val = float(max_val)
-
-            try:
-                old_float = float(old_val)
-            except ValueError:
-                old_float = 0.0
-
+            min_val = float(config.get("minValue", 0))
+            max_val = float(config.get("maxValue", 100))
+            
             new_float = st.number_input(
-                label_for_score,
-                min_value=min_val if min_val is not None else None,
-                max_value=max_val if max_val is not None else None,
-                value=old_float,
-                key=dynamic_key
+                f"{score_name} ({data_type})",
+                min_value=min_val,
+                max_value=max_val,
+                value=float(current_value) if current_value is not None else 0.0,
+                key=f"{score_name}_{selected_trace_id}"
             )
             new_score_values[score_name] = new_float
 
-        elif data_type == "BOOLEAN":
-            old_bool = str(old_val).lower() in ("true", "yes", "1")
-            new_bool = st.checkbox(label_for_score, value=old_bool, key=dynamic_key)
-            new_score_values[score_name] = new_bool
+        elif data_type == "CATEGORICAL":
+            if config.get("categories", []):
+                all_labels = ["<None>"] + [cat["label"] for cat in config["categories"]]
+                default_index = 0
+                if current_value in all_labels:
+                    default_index = all_labels.index(current_value)
+
+                selected_label = st.selectbox(
+                    f"{score_name} ({data_type})",
+                    options=all_labels,
+                    index=default_index,
+                    key=f"{score_name}_{selected_trace_id}"
+                )
+                new_score_values[score_name] = None if selected_label == "<None>" else selected_label
+
         else:
             # Fallback / unknown data type => treat as text
-            new_val = st.text_input(label_for_score, value=str(old_val), key=dynamic_key)
+            new_val = st.text_input(f"{score_name} ({data_type})", value=str(current_value), key=f"{score_name}_{selected_trace_id}")
             if not new_val.strip():
                 new_score_values[score_name] = None
             else:
