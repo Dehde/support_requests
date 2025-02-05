@@ -60,15 +60,38 @@ def main():
     st.sidebar.header("Filters")
     filter_option = st.sidebar.radio(
         "Filter traces",
-        options=["Show all traces", "Show only unlabelled traces", "Show only labelled traces"],
+        options=[
+            "Show all traces", 
+            "Show only unlabelled traces", 
+            "Show only labelled traces",
+            "Show only traces with missing context"
+        ],
         help="Select which traces to display based on their review status."
     )
     
     df_not_reviewed = df[df["ideal_answer"].isnull() | (df["ideal_answer"] == "")]
     df_reviewed = df[df["ideal_answer"].notna() & (df["ideal_answer"] != "")]
     
+    # Prepare context_still_missing calculation
+    if 'context_missing' in df.columns:
+        df['context_missing'] = pd.to_numeric(df['context_missing'], errors='coerce')
+    if 'context_added' in df.columns:
+        df['context_added'] = pd.to_numeric(df['context_added'], errors='coerce')
+        # Fill NaN/None values with 0 (False)
+        df['context_added'] = df['context_added'].fillna(0)
+    else:
+        df['context_added'] = 0  # Default to False if column doesn't exist
+    
+    df['context_still_missing'] = (
+        (df['context_missing'] == 1) & 
+        (df['context_added'] != 1)  # Changed from == 0 to != 1
+    ).astype(int)
+    
+    df_missing_context = df[df['context_still_missing'] == 1]
+    
     st.sidebar.write(f"**Unlabelled traces:** {df_not_reviewed.shape[0]}")
     st.sidebar.write(f"**Labelled traces:** {df_reviewed.shape[0]}")
+    st.sidebar.write(f"**Traces with missing context:** {df_missing_context.shape[0]}")
     st.sidebar.write(f"**Total unique traces:** {df.shape[0]}")
     st.sidebar.write(f"**Total traces:** {df.attrs.get('total_traces_count', df.shape[0])}")
 
@@ -96,7 +119,7 @@ def main():
         # Calculate context_still_missing
         filtered_df['context_still_missing'] = (
             (filtered_df['context_missing'] == 1) & 
-            (filtered_df['context_added'] == 0)
+            (filtered_df['context_added'] != 1)
         ).astype(int)
         
         # Group by month and calculate statistics
@@ -122,6 +145,9 @@ def main():
                 st.sidebar.write(f"- Context Still Missing: {int(stats['context_still_missing'])}")
             
             st.sidebar.write("")  # Add spacing between months
+            
+    elif filter_option == "Show only traces with missing context":
+        filtered_df = df_missing_context
     else:
         filtered_df = df
 
