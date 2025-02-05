@@ -64,16 +64,27 @@ class LangfuseClient:
         scores_map = self.build_trace_scores_map(scores)
         data_rows = self.create_data_rows(traces, scores_map)
         
+        # Store total traces count before deduplication
+        total_traces = len(data_rows)
+        
         # Create DataFrame
         df = pd.DataFrame(data_rows)
         
         # Only drop duplicates if the column exists
         if 'User Question' in df.columns:
+            df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+            df = df.sort_values('Timestamp', ascending=True)
             df = df.drop_duplicates(subset=['User Question'], keep='first')
+        
+        # Store both counts in the DataFrame metadata
+        df.attrs['total_traces_count'] = total_traces
+        df.attrs['unique_traces_count'] = len(df)
         
         # Analyze and print statistics
         self._analyze_scores(df)
         
+        print(f"Total traces before deduplication: {total_traces}")
+        print(f"Unique traces after deduplication: {len(df)}")
         print("Exiting function: load_traces_as_dataframe")
         return df
 

@@ -69,7 +69,8 @@ def main():
     
     st.sidebar.write(f"**Unlabelled traces:** {df_not_reviewed.shape[0]}")
     st.sidebar.write(f"**Labelled traces:** {df_reviewed.shape[0]}")
-    st.sidebar.write(f"**Total traces:** {df.shape[0]}")
+    st.sidebar.write(f"**Total unique traces:** {df.shape[0]}")
+    st.sidebar.write(f"**Total traces:** {df.attrs.get('total_traces_count', df.shape[0])}")
 
     if filter_option == "Show only unlabelled traces":
         filtered_df = df_not_reviewed
