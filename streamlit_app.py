@@ -76,6 +76,52 @@ def main():
         filtered_df = df_not_reviewed
     elif filter_option == "Show only labelled traces":
         filtered_df = df_reviewed
+        
+        # Add monthly statistics to sidebar only for labelled traces
+        st.sidebar.markdown("---")
+        st.sidebar.header("Monthly Statistics")
+        
+        # Convert columns to numeric, coercing errors to NaN
+        if 'HumanAnswerCorrectness' in filtered_df.columns:
+            filtered_df['HumanAnswerCorrectness'] = pd.to_numeric(filtered_df['HumanAnswerCorrectness'], errors='coerce')
+        if 'context_missing' in filtered_df.columns:
+            filtered_df['context_missing'] = pd.to_numeric(filtered_df['context_missing'], errors='coerce')
+        if 'context_added' in filtered_df.columns:
+            filtered_df['context_added'] = pd.to_numeric(filtered_df['context_added'], errors='coerce')
+            # Fill NaN/None values with 0 (False)
+            filtered_df['context_added'] = filtered_df['context_added'].fillna(0)
+        else:
+            filtered_df['context_added'] = 0  # Default to False if column doesn't exist
+        
+        # Calculate context_still_missing
+        filtered_df['context_still_missing'] = (
+            (filtered_df['context_missing'] == 1) & 
+            (filtered_df['context_added'] == 0)
+        ).astype(int)
+        
+        # Group by month and calculate statistics
+        monthly_stats = filtered_df.groupby(filtered_df['Timestamp'].dt.to_period('M')).agg({
+            'ID': 'count',  # Count of traces
+            'HumanAnswerCorrectness': 'mean',  # Average score
+            'context_missing': 'sum',  # Sum of context_missing
+            'context_still_missing': 'sum'  # Sum of context_still_missing
+        }).round(2)  # Round to 2 decimal places
+        
+        # Display statistics for each month
+        for month in sorted(monthly_stats.index, reverse=True):
+            stats = monthly_stats.loc[month]
+            st.sidebar.write(f"**{month.strftime('%b %Y')}:**")
+            st.sidebar.write(f"- Traces: {int(stats['ID'])}")
+            
+            # Only show score stats if there are values
+            if not pd.isna(stats['HumanAnswerCorrectness']):
+                st.sidebar.write(f"- Avg. Correctness: {stats['HumanAnswerCorrectness']}")
+            
+            if not pd.isna(stats['context_missing']):
+                st.sidebar.write(f"- Context Missing: {int(stats['context_missing'])}")
+                st.sidebar.write(f"- Context Still Missing: {int(stats['context_still_missing'])}")
+            
+            st.sidebar.write("")  # Add spacing between months
     else:
         filtered_df = df
 
@@ -106,14 +152,6 @@ def main():
     month_traces = filtered_df[filtered_df['Timestamp'].dt.to_period('M') == selected_month]
     month_traces = month_traces.sort_values(by="Timestamp", ascending=False).reset_index(drop=True)
     
-    # Add monthly statistics to sidebar
-    st.sidebar.markdown("---")
-    st.sidebar.header("Monthly Statistics")
-    monthly_counts = filtered_df.groupby(filtered_df['Timestamp'].dt.to_period('M')).size()
-    for month in sorted(monthly_counts.index, reverse=True):
-        count = monthly_counts[month]
-        st.sidebar.write(f"**{month.strftime('%b %Y')}:** {count} traces")
-
     # Create timestamp-question selection for the selected month
     def format_trace_option(index):
         row = month_traces.loc[index]
